@@ -37,6 +37,13 @@ async def post_stop(application):
     logger.info("🛑 MongoDB closed")
 
 
+async def error_handler(update, context):
+    """Log unhandled exceptions without killing the bot."""
+    logger.error(
+        "Exception while handling an update %s:", update, exc_info=context.error
+    )
+
+
 def main():
     if not BOT_TOKEN:
         logger.error("❌ BOT_TOKEN not set in .env!")
@@ -44,6 +51,13 @@ def main():
     if not API_ID or not API_HASH:
         logger.error("❌ API_ID and API_HASH must be set in .env (from my.telegram.org)!")
         sys.exit(1)
+
+    logger.info("API_ID=%s  API_HASH=%s…", API_ID, API_HASH[:4] if API_HASH else "MISSING")
+    if len(API_HASH) != 32:
+        logger.warning(
+            "⚠️ API_HASH looks wrong (length %d, expected 32 hex chars). "
+            "Sessions will fail to connect if it is incorrect.", len(API_HASH)
+        )
 
     application = (
         ApplicationBuilder()
@@ -53,6 +67,7 @@ def main():
         .concurrent_updates(True)
         .build()
     )
+    application.add_error_handler(error_handler)
 
     # Registration order matters:
     #  - ConversationHandlers first, so their ``back_main`` fallbacks get the
