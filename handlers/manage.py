@@ -5,7 +5,7 @@ from keyboards.inline import (
     manage_dashboard_kb, device_dashboard_kb, terminate_confirm_kb,
     otp_menu_kb, back_to_dashboard_kb, cancel_kb, main_menu_kb,
 )
-from utils.session_utils import verify_and_get_info
+from utils.session_utils import verify_and_get_client  # <-- FIXED: was verify_and_get_info
 from utils.helpers import (
     check_spam_status, get_devices, terminate_device,
     clear_all_data, fetch_otp, format_account_info, format_device,
@@ -26,7 +26,8 @@ async def manage_account_entry(update: Update, context: ContextTypes.DEFAULT_TYP
         "🔑 **Manage Account**\n\n"
         "Please send your Telegram **hex session string**.\n"
         "It will be verified and connected securely.\n\n"
-        "_Example:_ `92dc84c8ec61d3df...`",
+        "_Example:_ `92dc84c8ec61d3df12cfb6f798b5fcaba08a01...`\n\n"
+        "_The bot will automatically detect the correct datacenter._",
         parse_mode="Markdown",
         reply_markup=cancel_kb("manage"),
     )
@@ -40,12 +41,13 @@ async def receive_hex(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_msg = await update.message.reply_text(
         "🔄 Processing your session...\n"
         "├─ Decoding hex...\n"
-        "├─ Connecting to Telegram...\n"
+        "├─ Probing datacenters...\n"
         "└─ Verifying account...",
         parse_mode="Markdown",
     )
 
-    client, info = await verify_and_get_info(hex_string, API_ID, API_HASH)
+    # verify_and_get_client auto-probes DCs 5→4→3→2→1 for raw hex
+    client, info = await verify_and_get_client(hex_string, API_ID, API_HASH)
 
     if client is None:
         await status_msg.edit_text(
@@ -60,7 +62,7 @@ async def receive_hex(update: Update, context: ContextTypes.DEFAULT_TYPE):
         spam_status = await check_spam_status(client)
 
         name = f"{info.get('first_name', '')} {info.get('last_name', '')}".strip()
-        account_oid = await save_account(
+        await save_account(
             owner_id=user_id,
             hex_key=hex_string,
             phone=info.get("phone", "Unknown"),
@@ -73,7 +75,6 @@ async def receive_hex(update: Update, context: ContextTypes.DEFAULT_TYPE):
         account_key = f"client_{user_id}_{info['id']}"
         context.user_data[account_key] = client
         context.user_data["current_account_key"] = account_key
-        context.user_data[f"account_oid_{user_id}_{info['id']}"] = str(account_oid)
 
         dash_text = format_account_info(info)
         dash_text += f"├─ **Devices**  : {len(devices)} connected\n"
@@ -113,32 +114,23 @@ async def dashboard_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await ask_mail(update, context)
     elif data.startswith("mng_back_dash_"):
         return await _show_dashboard(update, context)
+    # OTP read handled directly in DASHBOARD state (see get_manage_conversation_handler)
+    elif data.startswith("otp_read_"):
+        return await read_otp(update, context)
     return DASHBOARD
 
 
-async def _get_client_from_context(context, user_id: int, account_user_id: int = None):
-    """Get the active Telethon client from user context."""
-    if account_user_id:
-        key = f"client_{user_id}_{account_user_id}"
-    else:
-        key = context.user_data.get("current_account_key")
+async def _get_client_from_context(context, user_id: int):
+    key = context.user_data.get("current_account_key")
     if not key:
         return None
-    client = context.user_data.get(key)
-    if not client:
-        return None
-    return client
+    return context.user_data.get(key)
 
 
 async def _show_dashboard(update, context):
     query = update.callback_query
     user_id = update.effective_user.id
-
-    # Get the first available client for this user
-    client = None
-    account_key = context.user_data.get("current_account_key")
-    if account_key:
-        client = context.user_data.get(account_key)
+    client = await _get_client_from_context(context, user_id)
 
     if not client or not client.is_connected():
         await query.edit_message_text(
@@ -169,7 +161,7 @@ async def _show_dashboard(update, context):
     return DASHBOARD
 
 
-# ── Device Dashboard ─────────────────────────────────────────────────────────
+# ── Device Dashboard ──────────────────────────────────────────────────────
 async def show_devices(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = update.effective_user.id
@@ -233,15 +225,12 @@ async def device_action_handler(update: Update, context: ContextTypes.DEFAULT_TY
     elif data.startswith("term_yes_"):
         dev_idx = int(data.split("_")[3])
         devices = context.user_data.get("devices_list", [])
-
         if dev_idx < len(devices):
             dev_hash = devices[dev_idx]["hash"]
             success = await terminate_device(client, dev_hash)
             if success:
-                await query.edit_message_text(
-                    "✅ Device terminated!\n\nRefreshing...",
-                    reply_markup=cancel_kb("refresh"),
-                )
+                await query.edit_message_text("✅ Device terminated!\n\nRefreshing...",
+                                              reply_markup=cancel_kb("refresh"))
                 await asyncio.sleep(1)
                 return await show_devices(update, context)
             else:
@@ -254,8 +243,7 @@ async def device_action_handler(update: Update, context: ContextTypes.DEFAULT_TY
 
     elif data.startswith("revoke_bot_"):
         devices = context.user_data.get("devices_list", [])
-        success_count = 0
-        fail_count = 0
+        success_count = fail_count = 0
         for dev in devices:
             if not dev.get("current"):
                 if await terminate_device(client, dev["hash"]):
@@ -263,9 +251,9 @@ async def device_action_handler(update: Update, context: ContextTypes.DEFAULT_TY
                 else:
                     fail_count += 1
 
-        text = f"🔌 **Bot Session Revocation**\n\n" \
-                f"├─ Terminated: {success_count}\n" \
-                f"└─ Failed: {fail_count}\n\n_Keeping only your current session._"
+        text = (f"🔌 **Bot Session Revocation**\n\n"
+                f"├─ Terminated: {success_count}\n"
+                f"└─ Failed: {fail_count}\n\n_Keeping only your current session._")
         await query.edit_message_text(text, parse_mode="Markdown",
                                       reply_markup=back_to_dashboard_kb("_"))
         await asyncio.sleep(1)
@@ -274,7 +262,7 @@ async def device_action_handler(update: Update, context: ContextTypes.DEFAULT_TY
     return DEVICE_LIST
 
 
-# ── Clear All ────────────────────────────────────────────────────────────────
+# ── Clear All ─────────────────────────────────────────────────────────────
 async def confirm_clear_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -319,7 +307,7 @@ async def handle_clear_all_confirm(update: Update, context: ContextTypes.DEFAULT
     return DASHBOARD
 
 
-# ── Fetch OTP ────────────────────────────────────────────────────────────────
+# ── Fetch OTP ─────────────────────────────────────────────────────────────
 async def show_otp_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -337,12 +325,10 @@ async def show_otp_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db_account = await get_account_by_user_id(user_id, me.id)
     acc_id_str = str(db_account["_id"]) if db_account else f"{user_id}_{me.id}"
 
-    text = (
-        f"📨 **Fetch OTP**\n\n"
-        f"Account: **{name}**\n"
-        f"Phone: `{phone}`\n\n"
-        f"Click below to read the latest OTP from Telegram messages."
-    )
+    text = (f"📨 **Fetch OTP**\n\n"
+            f"Account: **{name}**\n"
+            f"Phone: `{phone}`\n\n"
+            f"Click below to read the latest OTP from Telegram messages.")
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=otp_menu_kb(acc_id_str))
     return DASHBOARD
 
@@ -364,15 +350,13 @@ async def read_otp(update: Update, context: ContextTypes.DEFAULT_TYPE):
         me = await client.get_me()
         phone = getattr(me, "phone", "Unknown")
         name = f"{getattr(me, 'first_name', '')} {getattr(me, 'last_name', '')}".strip()
-        text = (
-            f"✅ **OTP Found!**\n\n"
-            f"Account: **{name}**\n"
-            f"Phone: `{phone}`\n\n"
-            f"📨 **Code:** `{otp}`\n\n"
-            f"_This code expires after a few minutes._"
-        )
+        text = (f"✅ **OTP Found!**\n\n"
+                f"Account: **{name}**\n"
+                f"Phone: `{phone}`\n\n"
+                f"📨 **Code:** `{otp}`\n\n"
+                f"_This code expires after a few minutes._")
     else:
-        text = "❌ No OTP found in recent messages.\n\nMake sure a login code was sent to this account recently."
+        text = "❌ No OTP found in recent messages.\n\nMake sure a login code was sent."
 
     me = await client.get_me()
     db_account = await get_account_by_user_id(user_id, me.id)
@@ -382,16 +366,15 @@ async def read_otp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return DASHBOARD
 
 
-# ── Change Mail ──────────────────────────────────────────────────────────────
+# ── Change Mail ───────────────────────────────────────────────────────────
 async def ask_mail(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     await query.edit_message_text(
         "📧 **Change Login Mail**\n\n"
-        "This sets/replaces the recovery email for 2FA.\n\n"
         "Send in format:\n"
         "`email@gmail.com app_password`\n\n"
-        "Or click Cancel to go back.",
+        "Or click Cancel.",
         parse_mode="Markdown",
         reply_markup=cancel_kb("change_mail"),
     )
@@ -409,59 +392,30 @@ async def receive_mail(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     parts = text.split(maxsplit=1)
     if len(parts) < 2:
-        await update.message.reply_text(
-            "❌ Invalid format. Send as: `email app_password`",
-            parse_mode="Markdown",
-            reply_markup=cancel_kb("change_mail"),
-        )
+        await update.message.reply_text("❌ Invalid format. Send as: `email app_password`",
+                                        parse_mode="Markdown", reply_markup=cancel_kb("change_mail"))
         return WAITING_MAIL
 
     email, app_pass = parts[0], parts[1]
     try:
         await save_mail(user_id, email, app_pass)
-
-        # Try to set via Telethon edit_2fa if password exists
-        try:
-            from telethon.tl.functions.account import GetPasswordRequest
-            pwd = await client(GetPasswordRequest())
-            if pwd.has_password:
-                # Inform user about email pattern
-                email_hint = pwd.email_unconfirmed_pattern or "None"
-                await update.message.reply_text(
-                    f"✅ **Mail Saved!**\n\n"
-                    f"Email: `{email}`\n\n"
-                    f"Current 2FA recovery email pattern: `{email_hint}`\n"
-                    f"To fully update, use the 2FA settings in your Telegram app.",
-                    parse_mode="Markdown",
-                    reply_markup=manage_dashboard_kb(),
-                )
-                return DASHBOARD
-        except Exception:
-            pass
-
         await update.message.reply_text(
             f"✅ **Mail Configuration Saved!**\n\nEmail: `{email}`",
-            parse_mode="Markdown",
-            reply_markup=manage_dashboard_kb(),
+            parse_mode="Markdown", reply_markup=manage_dashboard_kb(),
         )
         return DASHBOARD
-
     except Exception as e:
-        await update.message.reply_text(
-            f"❌ Failed to set email: {e}",
-            reply_markup=cancel_kb("change_mail"),
-        )
+        await update.message.reply_text(f"❌ Failed: {e}", reply_markup=cancel_kb("change_mail"))
         return WAITING_MAIL
 
 
-# ── Cancel ───────────────────────────────────────────────────────────────────
+# ── Cancel ────────────────────────────────────────────────────────────────
 async def cancel_manage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if query:
         await query.answer()
     user_id = update.effective_user.id
 
-    # Clean up client
     account_key = context.user_data.get("current_account_key")
     if account_key:
         client = context.user_data.pop(account_key, None)
@@ -470,8 +424,8 @@ async def cancel_manage(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await client.disconnect()
             except Exception:
                 pass
-        context.user_data.pop("current_account_key", None)
-        context.user_data.pop("devices_list", None)
+    context.user_data.pop("current_account_key", None)
+    context.user_data.pop("devices_list", None)
 
     from handlers.start import WELCOME_TEXT
     if query:
@@ -481,6 +435,7 @@ async def cancel_manage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
+# ── Conversation Handler ──────────────────────────────────────────────────
 def get_manage_conversation_handler():
     return ConversationHandler(
         entry_points=[CallbackQueryHandler(manage_account_entry, pattern="^manage_account$")],
@@ -491,6 +446,7 @@ def get_manage_conversation_handler():
             ],
             DASHBOARD: [
                 CallbackQueryHandler(dashboard_handler, pattern="^mng_"),
+                CallbackQueryHandler(read_otp, pattern="^otp_read_"),  # <-- NOW INSIDE conversation
                 CallbackQueryHandler(cancel_manage, pattern="^cancel_"),
             ],
             DEVICE_LIST: [
@@ -518,8 +474,4 @@ def get_manage_conversation_handler():
 
 def register(application):
     """Register manage conversation handler."""
-    conv_handler = get_manage_conversation_handler()
-    application.add_handler(conv_handler)
-    # Also register the OTP read callback outside the conversation for My Accounts usage
-    application.add_handler(CallbackQueryHandler(read_otp, pattern="^otp_read_"))
-    application.add_handler(CallbackQueryHandler(show_otp_menu, pattern="^show_otp_"))
+    application.add_handler(get_manage_conversation_handler())
