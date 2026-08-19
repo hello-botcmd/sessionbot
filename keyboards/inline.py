@@ -12,6 +12,14 @@ def main_menu_kb():
     return InlineKeyboardMarkup(kb)
 
 
+def admin_back_kb():
+    """Back button for the admin/help menu."""
+    kb = [
+        [InlineKeyboardButton("🔙 Back to Menu", callback_data="back_main")]
+    ]
+    return InlineKeyboardMarkup(kb)
+
+
 def manage_dashboard_kb():
     kb = [
         [
