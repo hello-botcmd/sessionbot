@@ -4,11 +4,11 @@ Session parsing and Telethon client creation.
 Supports:
   1. Telethon StringSession (base64)
   2. Pyrogram session strings (all packing formats)
-  3. Raw 256-byte auth_key as hex (REQUIRES explicit dc_id)
+  3. Raw 256-byte auth_key as hex (auto-probes DCs 5→4→3→2→1 if not specified)
   4. Telethon/Pyrogram SQLite .session files
 
-No guessing. No inference-based DC detection. Every format is
-identified by its structure, not by heuristics.
+No guessing-based format detection. Every format is identified by its
+binary/structural signature.
 """
 
 from __future__ import annotations
@@ -29,12 +29,13 @@ from telethon.sessions import StringSession
 logger = logging.getLogger(__name__)
 
 # ── Telegram production datacenter addresses ──────────────────────────────
+# Verified against Telethon source and Pyrogram documentation (2026).
 
 DC_IPS: dict[int, tuple[str, int]] = {
     1: ("149.154.175.50", 443),
     2: ("149.154.167.51", 443),
     3: ("149.154.175.100", 443),
-    4: ("149.154.167.91", 443),  # fixed: was 149.167.167.91
+    4: ("149.154.167.91", 443),  # was 149.167.167.91 in original paste — WRONG, fixed
     5: ("91.108.56.151", 443),
 }
 
@@ -82,7 +83,7 @@ class SessionParts:
         return session
 
 
-# ── Raw hex auth key (REQUIRES explicit dc_id) ────────────────────────────
+# ── Raw hex auth key ──────────────────────────────────────────────────────
 
 
 def parse_raw_hex_auth_key(hex_key: str, dc_id: int) -> SessionParts:
@@ -139,7 +140,7 @@ def parse_telethon_string(value: str) -> SessionParts:
     return parts
 
 
-# ── Pyrogram session strings (multiple packing formats) ────────────────────
+# ── Pyrogram session strings ──────────────────────────────────────────────
 
 _PYRO_FMT = ">BI?256sQ?"
 _PYRO_FMT64_ALT = ">BI?256sQI?"
@@ -159,9 +160,7 @@ def _b64decode(value: str) -> bytes:
 
 def parse_pyrogram_string(value: str) -> SessionParts:
     """
-    Parse a Pyrogram packed session string.
-
-    Tries all known struct formats (current, alternate, old 64-bit, old 32-bit).
+    Parse a Pyrogram packed session string (all known packing formats).
     """
     data = _b64decode(value)
 
@@ -212,9 +211,7 @@ def parse_pyrogram_string(value: str) -> SessionParts:
 
 
 def parse_session_file(path: str | Path) -> SessionParts:
-    """
-    Read a Telethon or Pyrogram SQLite ``.session`` file from disk.
-    """
+    """Parse a Telethon or Pyrogram SQLite ``.session`` file from disk."""
     path = Path(path)
     if not path.is_file():
         raise FileNotFoundError(f"Session file not found: {path}")
@@ -300,18 +297,18 @@ def parse_session(value: str, dc_id: int | None = None) -> SessionParts:
     except Exception:
         pass
 
-    # 3. Raw hex (last resort, requires dc_id)
+    # 3. Raw hex (last resort)
     try:
         clean = value[2:] if value.startswith(("0x", "0X")) else value
         if len(clean) == 512:
             if dc_id is None:
                 raise ValueError(
-                    "Raw auth_key hex requires an explicit ``dc_id``. "
-                    "Use a Telethon/Pyrogram string session (which carries "
-                    "dc_id internally) or supply dc_id as a second argument."
+                    "NEED_DC_PROBE"  # special sentinel — triggers DC probing upstream
                 )
             return parse_raw_hex_auth_key(clean, dc_id)
-    except ValueError:
+    except ValueError as exc:
+        if str(exc) == "NEED_DC_PROBE":
+            raise
         raise
 
     raise ValueError(
@@ -334,8 +331,7 @@ def create_telethon_client(
 ) -> TelegramClient:
     """
     Build a ``TelegramClient`` from normalised ``SessionParts``.
-
-    The client is **not** yet connected. Call ``verify_client`` next.
+    The client is **not** yet connected.
     """
     parts.validate()
     session = parts.to_telethon_session()
@@ -350,9 +346,7 @@ async def verify_client(client: TelegramClient) -> dict[str, Any]:
     Connect the client and verify the session is authorized.
 
     Returns account info on success.
-
-    Raises ``ValueError`` with a descriptive message on failure.
-    The client is disconnected automatically on error.
+    Raises ``ValueError`` on failure (client is disconnected automatically).
     """
     await client.connect()
 
@@ -383,8 +377,10 @@ async def verify_client(client: TelegramClient) -> dict[str, Any]:
 
 # ── High-level convenience for bot handlers ───────────────────────────────
 
+DC_PROBE_ORDER = [5, 4, 3, 2, 1]  # try most recent/common DCs first
 
-async def verify_and_get_info(
+
+async def verify_and_get_client(
     raw_input: str,
     api_id: int,
     api_hash: str,
@@ -400,30 +396,51 @@ async def verify_and_get_info(
     api_id : int
     api_hash : str
     dc_id : int | None
-        Required **only** for raw hex auth_key.
+        Optional. For raw hex, if omitted the bot will probe DCs
+        5 → 4 → 3 → 2 → 1 until one works.
 
     Returns
     -------
     ``(client, info_dict)`` on success.
     ``(None, error_message_string)`` on failure.
 
-    ``info_dict`` contains keys compatible with the bot handlers:
+    ``info_dict`` contains:
     ``id``, ``phone``, ``first_name``, ``last_name``, ``username``,
     ``dc_id``, ``session_string``, ``hex_input``.
     """
-    # ── Parse ──────────────────────────────────────────────────────────
+    # ── Step 1: Determine if this is raw hex that needs DC probing ─────
+    is_hex_input = _looks_like_raw_hex(raw_input)
+
+    if is_hex_input and dc_id is None:
+        # Probe DCs 5 → 4 → 3 → 2 → 1
+        last_error = "No DC could authenticate this session."
+        for probe_dc in DC_PROBE_ORDER:
+            result = await _try_dc(raw_input, api_id, api_hash, probe_dc)
+            if result[0] is not None:
+                return result
+            # Keep the error message from the last attempt
+            if isinstance(result[1], str):
+                last_error = result[1]
+            # If it's a FloodWait, stop probing
+            if "Rate-limited" in str(result[1]):
+                return None, result[1]
+
+        return None, (
+            f"Tried all datacenters (5→4→3→2→1). "
+            f"Last error: {last_error}"
+        )
+
+    # ── Step 2: Normal path (dc_id provided or non-hex format) ─────────
     try:
         parts = parse_session(raw_input, dc_id=dc_id)
     except ValueError as exc:
         return None, str(exc)
 
-    # ── Create client ──────────────────────────────────────────────────
     try:
         client = create_telethon_client(parts, api_id, api_hash)
     except ValueError as exc:
         return None, str(exc)
 
-    # ── Connect & verify ───────────────────────────────────────────────
     try:
         info = await verify_client(client)
     except FloodWaitError as exc:
@@ -434,11 +451,13 @@ async def verify_and_get_info(
         return None, f"Telegram API error: {exc}"
     except ConnectionError as exc:
         return None, f"Network error: {exc}"
+    except TimeoutError as exc:
+        return None, f"Connection timed out: {exc}"
     except Exception as exc:
         logger.exception("Unexpected error during session verification")
         return None, f"Unexpected error: {exc}"
 
-    # ── Enrich info dict for bot handler compatibility ─────────────────
+    # Enrich info dict for bot handler compatibility
     try:
         session_string = client.session.save()
     except Exception:
@@ -449,3 +468,52 @@ async def verify_and_get_info(
     info["hex_input"] = raw_input
 
     return client, info
+
+
+def _looks_like_raw_hex(value: str) -> bool:
+    """Check if input is a raw 512-char hex string (no session structure)."""
+    clean = value.strip()
+    if clean.startswith(("0x", "0X")):
+        clean = clean[2:]
+    if len(clean) != 512:
+        return False
+    try:
+        bytes.fromhex(clean)
+        return True
+    except ValueError:
+        return False
+
+
+async def _try_dc(
+    raw_input: str,
+    api_id: int,
+    api_hash: str,
+    dc_id: int,
+) -> tuple[TelegramClient | None, dict[str, Any] | str]:
+    """Try to authenticate against a specific DC. Internal helper."""
+    try:
+        clean = raw_input.strip()
+        if clean.startswith(("0x", "0X")):
+            clean = clean[2:]
+        parts = parse_raw_hex_auth_key(clean, dc_id)
+        client = create_telethon_client(parts, api_id, api_hash)
+        info = await verify_client(client)
+
+        # Enrich
+        try:
+            session_string = client.session.save()
+        except Exception:
+            session_string = ""
+        info["dc_id"] = dc_id
+        info["session_string"] = session_string
+        info["hex_input"] = raw_input
+
+        logger.info(f"Session authenticated on DC-{dc_id}")
+        return client, info
+
+    except FloodWaitError as exc:
+        # Disconnect the failed client
+        return None, f"Rate-limited on DC-{dc_id}. Wait {exc.seconds}s."
+    except Exception as exc:
+        # Disconnect silently — just return error
+        return None, f"DC-{dc_id}: {exc}"
