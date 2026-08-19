@@ -4,7 +4,7 @@ from datetime import datetime, timezone, timedelta
 from telegram import Update
 from telegram.ext import ContextTypes, CallbackQueryHandler, MessageHandler, filters, ConversationHandler
 from keyboards.inline import guard_kb, guard_back_kb, cancel_kb, main_menu_kb
-from utils.session_utils import verify_and_get_client
+from utils.session_utils import verify_and_get_info
 from utils.helpers import get_devices, check_spam_status, format_account_info, terminate_device
 from database.models import save_account, get_accounts_by_owner, update_account
 from config import API_ID, API_HASH
@@ -42,7 +42,7 @@ async def receive_guard_hex(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown",
     )
 
-    client, info = await verify_and_get_client(hex_string, API_ID, API_HASH)
+    client, info = await verify_and_get_info(hex_string, API_ID, API_HASH)
     if client is None:
         await status_msg.edit_text(
             f"❌ **Verification Failed**\n\n{info}",
