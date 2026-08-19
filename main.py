@@ -3,14 +3,15 @@
 Telegram Session Manager Bot
 ─────────────────────────────
 """
-
 import logging
 import sys
+
 from telegram.ext import ApplicationBuilder
 
-from config import BOT_TOKEN
+from config import BOT_TOKEN, API_ID, API_HASH
 from database.db import db
 from handlers import start, manage, guard, my_accounts, admin
+from utils.guard import GuardManager
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -29,6 +30,9 @@ async def post_init(application):
 
 
 async def post_stop(application):
+    # Stop all running guard loops and disconnect their clients cleanly.
+    manager = GuardManager(application)
+    await manager.stop_all()
     await db.close()
     logger.info("🛑 MongoDB closed")
 
@@ -36,6 +40,9 @@ async def post_stop(application):
 def main():
     if not BOT_TOKEN:
         logger.error("❌ BOT_TOKEN not set in .env!")
+        sys.exit(1)
+    if not API_ID or not API_HASH:
+        logger.error("❌ API_ID and API_HASH must be set in .env (from my.telegram.org)!")
         sys.exit(1)
 
     application = (
@@ -47,15 +54,16 @@ def main():
         .build()
     )
 
-    # Register handlers — ConversationHandlers first
-    start.register(application)
+    # Registration order matters:
+    #  - ConversationHandlers first, so their ``back_main`` fallbacks get the
+    #    callback while a conversation is active (and clean up their clients).
+    #  - The global ``back_main`` handler (start.py) is registered LAST, so it
+    #    only fires for non-conversation menus (My Accounts, Help).
     manage.register(application)
     guard.register(application)
     my_accounts.register(application)
     admin.register(application)
-
-    # ⚠️ NO wildcard pattern="^.*$" fallback — it would steal callbacks
-    # from active ConversationHandlers and break all state transitions.
+    start.register(application)
 
     logger.info("🚀 Starting polling...")
     application.run_polling(allowed_updates=["message", "callback_query"])
