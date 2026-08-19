@@ -5,7 +5,7 @@ from keyboards.inline import (
     manage_dashboard_kb, device_dashboard_kb, terminate_confirm_kb,
     otp_menu_kb, back_to_dashboard_kb, cancel_kb, main_menu_kb,
 )
-from utils.session_utils import verify_and_get_client
+from utils.session_utils import verify_and_get_info
 from utils.helpers import (
     check_spam_status, get_devices, terminate_device,
     clear_all_data, fetch_otp, format_account_info, format_device,
