@@ -12,13 +12,14 @@ A comprehensive Telegram session management tool with:
 
 import logging
 import sys
+from telegram import Update
 from telegram.ext import ApplicationBuilder, CallbackQueryHandler
 
 from config import BOT_TOKEN
 from database.db import db
 from handlers import start, manage, guard, my_accounts, admin
 
-# ── Logging setup ──────────────────────────────────────────────────────────
+# ── Logging ───────────────────────────────────────────────────────────────
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     level=logging.INFO,
@@ -57,19 +58,19 @@ def main():
         .build()
     )
 
-    # ── Register all handlers ────────────────────────────────────────────
-    start.register(application)
-    manage.register(application)
-    guard.register(application)
-    my_accounts.register(application)
-    admin.register(application)
+    # ── Register handlers (ORDER MATTERS!) ─────────────────────────────
+    # ConversationHandlers go first so they capture their entry points
+    # before any loose CallbackQueryHandler can steal them.
+    start.register(application)       # /start command + back_main callback
+    manage.register(application)      # Manage account ConversationHandler
+    guard.register(application)       # Guard mode ConversationHandler
+    my_accounts.register(application) # Paginated accounts + actions
+    admin.register(application)       # /addsudo, /rmsudo, /help etc.
 
-    # ── Global fallback for unhandled callbacks ───────────────────────────
-    async def fallback_callback(update, context):
-        query = update.callback_query
-        if query:
-            await query.answer("This button is not available right now.")
-    application.add_handler(CallbackQueryHandler(fallback_callback, pattern="^.*$"))
+    # ── NO global wildcard fallback ────────────────────────────────────
+    # A pattern="^.*$" fallback would intercept ALL unhandled callbacks,
+    # breaking ConversationHandler state transitions. Let unmatched
+    # callbacks silently expire instead.
 
     logger.info("🚀 Starting polling...")
     application.run_polling(allowed_updates=["message", "callback_query"])
