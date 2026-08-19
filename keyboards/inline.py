@@ -2,7 +2,6 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 
 def main_menu_kb():
-    """Main menu with 3 buttons: 2 in top row, 1 below."""
     kb = [
         [
             InlineKeyboardButton("🔑 Manage Account", callback_data="manage_account"),
@@ -14,7 +13,6 @@ def main_menu_kb():
 
 
 def manage_dashboard_kb():
-    """Manage account dashboard: 2x2 grid + cancel."""
     kb = [
         [
             InlineKeyboardButton("📱 Device Dashboard", callback_data="mng_devices"),
@@ -29,46 +27,57 @@ def manage_dashboard_kb():
     return InlineKeyboardMarkup(kb)
 
 
-def device_dashboard_kb(devices: list, account_id: str):
+def device_dashboard_kb(device_count: int):
     """
-    Build device dashboard with terminate buttons per device + revoke bot + back.
+    Build device dashboard with one button per device + revoke bot + back.
+    Uses pipe separator in callback data to avoid underscore ambiguity.
+
+    Callback format: term|{idx}
     """
     kb = []
-    for i, dev in enumerate(devices):
-        current = " ✅" if dev.get("current") else ""
-        label = f"{'📱' if not dev.get('current') else '✅'} Device {i+1}{current}"
-        kb.append([InlineKeyboardButton(label, callback_data=f"term_dev_{account_id}_{i}")])
+    for i in range(device_count):
+        label = f"📱 Device #{i + 1} — Tap to Terminate"
+        kb.append([InlineKeyboardButton(label, callback_data=f"term|{i}")])
 
-    kb.append([
-        InlineKeyboardButton("🔌 Revoke Bot Sessions", callback_data=f"revoke_bot_{account_id}"),
-    ])
-    kb.append([InlineKeyboardButton("🔙 Back", callback_data=f"mng_back_dash_{account_id}")])
+    kb.append([InlineKeyboardButton("🔌 Revoke All Bot Sessions", callback_data="revoke_bot")])
+    kb.append([InlineKeyboardButton("🔙 Back to Dashboard", callback_data="mng_back_dash")])
     return InlineKeyboardMarkup(kb)
 
 
-def terminate_confirm_kb(account_id: str, device_idx: int):
+def terminate_confirm_kb(device_idx: int):
     """Yes / Cancel for device termination."""
     kb = [
         [
-            InlineKeyboardButton("✅ Yes, Terminate", callback_data=f"term_yes_{account_id}_{device_idx}"),
-            InlineKeyboardButton("❌ Cancel", callback_data=f"term_no_{account_id}"),
+            InlineKeyboardButton("✅ Yes, Terminate", callback_data=f"term_yes|{device_idx}"),
+            InlineKeyboardButton("❌ Cancel", callback_data="term_no"),
         ]
     ]
     return InlineKeyboardMarkup(kb)
 
 
-def otp_menu_kb(account_id: str):
-    """OTP: show button to fetch + back."""
+def clear_all_confirm_kb():
+    """Yes / Cancel for clear all."""
     kb = [
-        [InlineKeyboardButton("📨 Read OTP", callback_data=f"otp_read_{account_id}")],
-        [InlineKeyboardButton("🔙 Back", callback_data=f"mng_back_dash_{account_id}")],
+        [
+            InlineKeyboardButton("✅ Yes, Clear Everything", callback_data="clr_yes"),
+            InlineKeyboardButton("❌ Cancel", callback_data="clr_no"),
+        ]
     ]
     return InlineKeyboardMarkup(kb)
 
 
-def back_to_dashboard_kb(account_id: str):
-    """Simple back button."""
-    kb = [[InlineKeyboardButton("🔙 Back", callback_data=f"mng_back_dash_{account_id}")]]
+def otp_menu_kb():
+    """OTP: show fetch button + back."""
+    kb = [
+        [InlineKeyboardButton("📨 Read Latest OTP", callback_data="otp_read")],
+        [InlineKeyboardButton("🔙 Back to Dashboard", callback_data="mng_back_dash")],
+    ]
+    return InlineKeyboardMarkup(kb)
+
+
+def back_to_dashboard_kb():
+    """Simple back to dashboard."""
+    kb = [[InlineKeyboardButton("🔙 Back to Dashboard", callback_data="mng_back_dash")]]
     return InlineKeyboardMarkup(kb)
 
 
@@ -80,26 +89,21 @@ def cancel_kb(action: str):
 
 # ── My Accounts Pagination ──────────────────────────────────────────────────
 def accounts_pagination_kb(accounts: list, page: int, total_pages: int):
-    """
-    Build keyboard for My Accounts with pagination.
-    Shows max 5 accounts per page + prev/next + refresh.
-    """
+    """Paginated account list (5 per page)."""
     kb = []
     start = page * 5
     end = min(start + 5, len(accounts))
 
     for i in range(start, end):
         acc = accounts[i]
-        name = acc.get("name", "Unknown")
-        phone = acc.get("phone", "Unknown")
-        label = f"📱 {name} ({phone})"
-        kb.append([InlineKeyboardButton(label, callback_data=f"acc_view_{acc['_id']}")])
+        label = f"📱 {acc.get('name', 'Unknown')} ({acc.get('phone', 'Unknown')})"
+        kb.append([InlineKeyboardButton(label, callback_data=f"acc_view|{acc['_id']}")])
 
     nav_row = []
     if page > 0:
-        nav_row.append(InlineKeyboardButton("◀️ Prev", callback_data=f"acc_page_{page - 1}"))
+        nav_row.append(InlineKeyboardButton("◀️ Prev", callback_data=f"acc_page|{page - 1}"))
     if page < total_pages - 1:
-        nav_row.append(InlineKeyboardButton("Next ▶️", callback_data=f"acc_page_{page + 1}"))
+        nav_row.append(InlineKeyboardButton("Next ▶️", callback_data=f"acc_page|{page + 1}"))
     if nav_row:
         kb.append(nav_row)
 
@@ -109,23 +113,22 @@ def accounts_pagination_kb(accounts: list, page: int, total_pages: int):
 
 
 def account_detail_kb(account_id: str):
-    """Account detail page: Fetch OTP, Revoke, Allow Login."""
+    """Account detail: Fetch OTP, Revoke, Allow Login (uses | separator)."""
     kb = [
         [
-            InlineKeyboardButton("📨 Fetch OTP", callback_data=f"acc_otp_{account_id}"),
-            InlineKeyboardButton("🔌 Revoke Bot", callback_data=f"acc_revoke_{account_id}"),
+            InlineKeyboardButton("📨 Fetch OTP", callback_data=f"acc_otp|{account_id}"),
+            InlineKeyboardButton("🔌 Revoke Bot", callback_data=f"acc_revoke|{account_id}"),
         ],
         [
-            InlineKeyboardButton("🔓 Allow Login (60s)", callback_data=f"acc_allow_{account_id}"),
+            InlineKeyboardButton("🔓 Allow Login (60s)", callback_data=f"acc_allow|{account_id}"),
         ],
-        [InlineKeyboardButton("🔙 Back to Accounts", callback_data="my_accounts")],
+        [InlineKeyboardButton("🔙 Back to Accounts", callback_data="acc_back")],
     ]
     return InlineKeyboardMarkup(kb)
 
 
-# ── Guard Account ────────────────────────────────────────────────────────────
+# ── Guard ───────────────────────────────────────────────────────────────────
 def guard_kb():
-    """Guard menu buttons."""
     kb = [
         [InlineKeyboardButton("🛡️ Activate Guard", callback_data="guard_activate")],
         [InlineKeyboardButton("🔙 Back to Menu", callback_data="back_main")],
@@ -133,14 +136,15 @@ def guard_kb():
     return InlineKeyboardMarkup(kb)
 
 
-def guard_back_kb(account_id: str):
+def guard_back_kb():
     """Back button from guard."""
-    kb = [[InlineKeyboardButton("🔙 Back", callback_data="guard_account")]]
+    kb = [[InlineKeyboardButton("🔙 Back to Menu", callback_data="back_main")]]
     return InlineKeyboardMarkup(kb)
 
 
-# ── Admin ────────────────────────────────────────────────────────────────────
-def admin_back_kb():
-    """Admin back."""
-    kb = [[InlineKeyboardButton("🔙 Back", callback_data="back_main")]]
+# ── Change Mail ─────────────────────────────────────────────────────────────
+def change_mail_kb():
+    kb = [
+        [InlineKeyboardButton("📧 Start Mail Change", callback_data="mail_start")]
+    ]
     return InlineKeyboardMarkup(kb)
