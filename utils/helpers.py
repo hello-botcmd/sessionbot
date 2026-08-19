@@ -10,6 +10,8 @@ from telethon import TelegramClient
 from telethon.tl.functions.account import (
     GetAuthorizationsRequest,
     ResetAuthorizationRequest,
+)
+from telethon.tl.functions.messages import (
     DeleteHistoryRequest,
 )
 from telethon.tl.functions.contacts import DeleteContactsRequest
