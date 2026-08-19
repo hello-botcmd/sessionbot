@@ -45,7 +45,7 @@ async def receive_hex(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown",
     )
 
-    client, info = await verify_and_get_client(hex_string, API_ID, API_HASH)
+    client, info = await verify_and_get_info(hex_string, API_ID, API_HASH)
 
     if client is None:
         await status_msg.edit_text(
