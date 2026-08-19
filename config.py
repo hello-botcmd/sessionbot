@@ -37,3 +37,8 @@ ALLOW_LOGIN_SECONDS = _get_int("ALLOW_LOGIN_SECONDS", 60) or 60
 
 # Email/IMAP settings used by the Change Mail + Mail Checker features.
 IMAP_TIMEOUT_SECONDS = _get_int("IMAP_TIMEOUT_SECONDS", 15) or 15
+
+# How long (seconds) to wait for a Telethon (MTProto) connect+verify before
+# giving up. Bounds the whole thing so a blocked DC fails fast instead of
+# hanging on "Processing...".
+MTPROTO_TIMEOUT = _get_int("MTPROTO_TIMEOUT", 30) or 30
