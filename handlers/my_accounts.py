@@ -5,7 +5,7 @@ from telegram import Update
 from telegram.ext import ContextTypes, CallbackQueryHandler, ConversationHandler
 from keyboards.inline import accounts_pagination_kb, account_detail_kb, main_menu_kb
 from database.models import get_accounts_by_owner, get_account_by_id, update_account, delete_account
-from utils.session_utils import verify_and_get_client
+from utils.session_utils import verify_and_get_info
 from utils.helpers import (
     check_spam_status, get_devices, fetch_otp,
     format_account_info, terminate_device,
@@ -99,7 +99,7 @@ async def _show_account_detail(update, context, account_id: str):
     context.user_data["detail_account_id"] = account_id
 
     # Create a temporary client to get live info
-    client, info = await verify_and_get_client(
+    client, info = await verify_and_get_info(
         account.get("session_string") or account.get("hex_key", ""),
         API_ID, API_HASH,
     )
