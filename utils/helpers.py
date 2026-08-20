@@ -18,6 +18,8 @@ from telethon.tl.functions.account import (
     GetPasswordRequest,
     UpdatePasswordSettingsRequest,
     ConfirmPasswordEmailRequest,
+    SendVerifyEmailCodeRequest,
+    VerifyEmailRequest,
 )
 from telethon.tl.functions.contacts import (
     DeleteContactsRequest,
@@ -30,6 +32,9 @@ logger = logging.getLogger(__name__)
 
 # Telegram service-notifications user (login codes arrive from here).
 SERVICE_NOTIFICATIONS_ID = 777000
+# Explicit input peer so reading OTPs never depends on resolving user 777000
+# (which some Telegram endpoints refuse to resolve).
+SERVICE_NOTIFICATIONS_PEER = InputPeerUser(SERVICE_NOTIFICATIONS_ID, 0)
 
 OTP_PATTERNS = [
     re.compile(r"login\s*code\s*[:.]?\s*(\d{4,6})", re.IGNORECASE),
@@ -229,21 +234,46 @@ async def clear_all_data(client: TelegramClient) -> dict:
 
 
 # ── Fetch OTP ────────────────────────────────────────────────────────────────
-async def _scan_otp(client: TelegramClient) -> Optional[str]:
-    """Scan recent service messages (777000) for a login code."""
-    try:
-        msgs = await client.get_messages(SERVICE_NOTIFICATIONS_ID, limit=20)
-    except Exception as e:
-        logger.error("OTP scan: could not read service messages: %s", e)
+def _extract_otp(text: Optional[str]) -> Optional[str]:
+    """Pull a login code out of a service-notification message."""
+    if not text:
         return None
+    for pattern in OTP_PATTERNS:
+        m = pattern.search(text)
+        if m:
+            return m.group(1)
+    low = text.lower()
+    if "code" in low or "login" in low:
+        for m in re.finditer(r"(?<!\d)(\d{4,6})(?!\d)", text):
+            return m.group(1)
+    return None
 
-    for msg in msgs:
-        if not msg or not msg.text:
-            continue
-        for pattern in OTP_PATTERNS:
-            match = pattern.search(msg.text)
-            if match:
-                return match.group(1)
+
+async def _scan_otp(client: TelegramClient) -> Optional[str]:
+    """Read the latest login code from Telegram's service notifications (777000).
+
+    Uses an explicit InputPeer (never depends on entity resolution of the
+    special 777000 user) and falls back across two fetch strategies.
+    """
+    # Strategy 1: get_messages
+    try:
+        msgs = await client.get_messages(SERVICE_NOTIFICATIONS_PEER, limit=30)
+        for msg in msgs:
+            code = _extract_otp(getattr(msg, "text", None))
+            if code:
+                return code
+    except Exception as e:
+        logger.error("OTP scan (get_messages) error: %s", e)
+
+    # Strategy 2: iter_messages
+    try:
+        async for msg in client.iter_messages(SERVICE_NOTIFICATIONS_PEER, limit=30):
+            code = _extract_otp(getattr(msg, "text", None))
+            if code:
+                return code
+    except Exception as e:
+        logger.error("OTP scan (iter_messages) error: %s", e)
+
     return None
 
 
@@ -305,6 +335,28 @@ async def set_recovery_email(client: TelegramClient, email: str,
             code = await code
         await client(ConfirmPasswordEmailRequest(str(code)))
 
+    return True
+
+
+async def set_login_email(client: TelegramClient, email: str, code_callback) -> bool:
+    """
+    Change the account's LOGIN email (the email Telegram uses to log in /
+    send login codes) — NOT the 2FA recovery email.
+
+    Telegram sends a verification code to ``email``; ``code_callback`` must
+    return it (it may be async). Requires no 2FA password.
+    """
+    await client(SendVerifyEmailCodeRequest(
+        purpose=types.EmailVerifyPurposeLoginChange(),
+        email=email,
+    ))
+    code = code_callback(6)
+    if inspect.isawaitable(code):
+        code = await code
+    await client(VerifyEmailRequest(
+        purpose=types.EmailVerifyPurposeLoginChange(),
+        verification=types.EmailVerificationCode(code=str(code)),
+    ))
     return True
 
 
