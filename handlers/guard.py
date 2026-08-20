@@ -40,6 +40,9 @@ async def _notify(application, entry: dict, text: str):
 async def guard_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    logger.info("🛡️ Guard button clicked by %s (callback=%s)",
+                update.effective_user.id, query.data)
+
     await safe_edit(query, 
         "🛡️ **Safe / Guard Account**\n\n"
         "Guard mode **monitors** your account and:\n"
@@ -307,4 +310,4 @@ def register(application):
     application.add_handler(CallbackQueryHandler(guard_deactivate, pattern=r"^guard_deactivate$"))
     application.add_handler(CallbackQueryHandler(guard_status, pattern=r"^guard_status$"))
     application.add_handler(CommandHandler("guardstatus", guard_status))
-    application.add_handler(CommandHandler("stopguard", guard_deactivate))
+    application.add_handler(CommandHandler("stopguard", guard_deactivate))                  
