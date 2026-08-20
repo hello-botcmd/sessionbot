@@ -32,10 +32,22 @@ logger = logging.getLogger(__name__)
 SERVICE_NOTIFICATIONS_ID = 777000
 
 OTP_PATTERNS = [
-    re.compile(r"login\s*code\s*[:.]\s*(\d{4,6})", re.IGNORECASE),
-    re.compile(r"confirmation\s*code\s*[:.]\s*(\d{4,6})", re.IGNORECASE),
+    re.compile(r"login\s*code\s*[:.]?\s*(\d{4,6})", re.IGNORECASE),
+    re.compile(r"your\s+login\s+code\s*(?:is\s*)?[:.]?\s*(\d{4,6})", re.IGNORECASE),
+    re.compile(r"confirmation\s*code\s*[:.]?\s*(\d{4,6})", re.IGNORECASE),
+    re.compile(r"verification\s*code\s*[:.]?\s*(\d{4,6})", re.IGNORECASE),
     re.compile(r"\bcode\s*[:.]\s*(\d{4,6})\b", re.IGNORECASE),
 ]
+
+
+def denied_text(user_id: int) -> str:
+    """Access-denied message that includes the user's ID for diagnosis."""
+    return (
+        "⛔ **Access Denied.**\n\n"
+        f"Your user ID: `{user_id}`\n\n"
+        "You are not authorized to use this bot.\n"
+        f"Ask the owner to add you with `/addsudo {user_id}`."
+    )
 
 
 # ── Safe message editing ────────────────────────────────────────────────────
@@ -218,22 +230,25 @@ async def clear_all_data(client: TelegramClient) -> dict:
 
 # ── Fetch OTP ────────────────────────────────────────────────────────────────
 async def _scan_otp(client: TelegramClient) -> Optional[str]:
-    """Scan recent service messages for a login code."""
+    """Scan recent service messages (777000) for a login code."""
     try:
-        async for msg in client.iter_messages(SERVICE_NOTIFICATIONS_ID, limit=10):
-            if not msg or not msg.text:
-                continue
-            for pattern in OTP_PATTERNS:
-                match = pattern.search(msg.text)
-                if match:
-                    return match.group(1)
+        msgs = await client.get_messages(SERVICE_NOTIFICATIONS_ID, limit=20)
     except Exception as e:
-        logger.error(f"OTP scan error: {e}")
+        logger.error("OTP scan: could not read service messages: %s", e)
+        return None
+
+    for msg in msgs:
+        if not msg or not msg.text:
+            continue
+        for pattern in OTP_PATTERNS:
+            match = pattern.search(msg.text)
+            if match:
+                return match.group(1)
     return None
 
 
-async def fetch_otp(client: TelegramClient, attempts: int = 6,
-                    delay: float = 3.0) -> Optional[str]:
+async def fetch_otp(client: TelegramClient, attempts: int = 8,
+                    delay: float = 2.5) -> Optional[str]:
     """
     Poll Telegram for the latest login code.
 
