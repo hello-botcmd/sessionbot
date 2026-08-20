@@ -21,6 +21,7 @@ from database.models import (
     get_mail,
     save_mail,
     set_last_otp,
+    is_authorized,
 )
 from keyboards.inline import (
     manage_dashboard_kb,
@@ -90,6 +91,10 @@ async def manage_account_entry(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.answer()
     logger.info("🔑 Manage Account button clicked by %s (callback=%s)",
                 update.effective_user.id, query.data)
+
+    if not await is_authorized(update.effective_user.id):
+        await safe_edit(query, "⛔ **Access Denied.**\n\nYou are not authorized to use this bot.")
+        return ConversationHandler.END
 
     # Clean up any stale client from a previous run
     await _drop_client(context)
