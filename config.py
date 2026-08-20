@@ -1,4 +1,4 @@
-import os
+ import os
 
 from dotenv import load_dotenv
 
@@ -14,6 +14,8 @@ def _get_int(name: str, default: int = 0) -> int:
     except ValueError:
         return default
 
+
+VERSION = "2.1"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 API_ID = _get_int("API_ID", 0)
