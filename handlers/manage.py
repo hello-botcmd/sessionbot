@@ -88,6 +88,8 @@ async def _drop_client(context):
 async def manage_account_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    logger.info("🔑 Manage Account button clicked by %s (callback=%s)",
+                update.effective_user.id, query.data)
 
     # Clean up any stale client from a previous run
     await _drop_client(context)
