@@ -45,6 +45,7 @@ from utils.helpers import (
     set_recovery_email,
     format_account_info,
     format_device,
+    safe_edit,
 )
 from utils.session_utils import verify_and_get_client
 
@@ -94,7 +95,7 @@ async def manage_account_entry(update: Update, context: ContextTypes.DEFAULT_TYP
         if key.startswith(("current_", "device_", "pending_")):
             context.user_data.pop(key, None)
 
-    await query.edit_message_text(
+    await safe_edit(query, 
         "🔑 **Manage Account**\n\n"
         "Please send your Telegram **session string**. Supported formats:\n"
         "├─ Telethon `StringSession`\n"
@@ -187,7 +188,7 @@ async def _refresh_dashboard(update, context):
     client = _get_client(context)
 
     if not client or not client.is_connected():
-        await query.edit_message_text(
+        await safe_edit(query, 
             "❌ Session expired. Reconnect from the main menu.",
             reply_markup=main_menu_kb(),
         )
@@ -211,7 +212,7 @@ async def _refresh_dashboard(update, context):
     text += f"├─ **Spam**     : {spam_status}\n"
     text += f"└─ **Status**   : ✅ Connected"
 
-    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=manage_dashboard_kb())
+    await safe_edit(query, text, parse_mode="Markdown", reply_markup=manage_dashboard_kb())
     return DASHBOARD
 
 
@@ -245,14 +246,14 @@ async def show_devices(update: Update, context: ContextTypes.DEFAULT_TYPE):
     client = _get_client(context)
 
     if not client or not client.is_connected():
-        await query.edit_message_text("❌ Session lost.", reply_markup=main_menu_kb())
+        await safe_edit(query, "❌ Session lost.", reply_markup=main_menu_kb())
         return ConversationHandler.END
 
     devices = await get_devices(client)
     context.user_data["device_list"] = devices
 
     if not devices:
-        await query.edit_message_text(
+        await safe_edit(query, 
             "📱 **Device Dashboard**\n\nNo active sessions found.",
             parse_mode="Markdown",
             reply_markup=back_to_dashboard_kb(),
@@ -264,7 +265,7 @@ async def show_devices(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text += format_device(dev, i) + "\n"
     text += "_Tap a device below to terminate it._"
 
-    await query.edit_message_text(
+    await safe_edit(query, 
         text,
         parse_mode="Markdown",
         reply_markup=device_dashboard_kb(devices),
@@ -279,7 +280,7 @@ async def device_action_handler(update: Update, context: ContextTypes.DEFAULT_TY
     client = _get_client(context)
 
     if not client or not client.is_connected():
-        await query.edit_message_text("❌ Session lost.", reply_markup=main_menu_kb())
+        await safe_edit(query, "❌ Session lost.", reply_markup=main_menu_kb())
         return ConversationHandler.END
 
     devices = context.user_data.get("device_list", [])
@@ -289,7 +290,7 @@ async def device_action_handler(update: Update, context: ContextTypes.DEFAULT_TY
         idx = int(data.split(":", 1)[1])
         if 0 <= idx < len(devices):
             dev = devices[idx]
-            await query.edit_message_text(
+            await safe_edit(query, 
                 f"⚠️ **Terminate This Device?**\n\n{format_device(dev, idx)}",
                 parse_mode="Markdown",
                 reply_markup=terminate_confirm_kb(idx),
@@ -301,9 +302,9 @@ async def device_action_handler(update: Update, context: ContextTypes.DEFAULT_TY
         idx = int(data.split(":", 1)[1])
         if 0 <= idx < len(devices):
             dev_hash = devices[idx]["hash"]
-            await query.edit_message_text("🔄 Terminating device...")
+            await safe_edit(query, "🔄 Terminating device...")
             ok = await terminate_device(client, dev_hash)
-            await query.edit_message_text(
+            await safe_edit(query, 
                 "✅ **Device terminated!**" if ok else "❌ Failed to terminate device."
             )
             await asyncio.sleep(0.5)
@@ -315,7 +316,7 @@ async def device_action_handler(update: Update, context: ContextTypes.DEFAULT_TY
 
     # ── Terminate all OTHER sessions ────────────────────────────────
     elif data == "revoke_all":
-        await query.edit_message_text("🔌 Terminating all other sessions...")
+        await safe_edit(query, "🔌 Terminating all other sessions...")
         ok_count = fail_count = 0
         for dev in devices:
             if not dev.get("current"):
@@ -323,7 +324,7 @@ async def device_action_handler(update: Update, context: ContextTypes.DEFAULT_TY
                     ok_count += 1
                 else:
                     fail_count += 1
-        await query.edit_message_text(
+        await safe_edit(query, 
             f"🔌 **Terminate All Sessions**\n\n"
             f"├─ Terminated: {ok_count}\n"
             f"└─ Failed: {fail_count}\n\n"
@@ -335,7 +336,7 @@ async def device_action_handler(update: Update, context: ContextTypes.DEFAULT_TY
 
     # ── Revoke bot connection (confirm) ─────────────────────────────
     elif data == "revoke_bot":
-        await query.edit_message_text(
+        await safe_edit(query, 
             "🔴 **Revoke Bot Connection?**\n\n"
             "This disconnects the bot from this account and **removes the stored "
             "account** from the database.\n\n"
@@ -351,12 +352,12 @@ async def device_action_handler(update: Update, context: ContextTypes.DEFAULT_TY
             await _drop_client(context)
             if account_id:
                 await delete_account(account_id)
-            await query.edit_message_text(
+            await safe_edit(query, 
                 "✅ **Bot connection revoked & account removed.**",
                 reply_markup=main_menu_kb(),
             )
         except Exception as e:
-            await query.edit_message_text(f"❌ Error: {e}", reply_markup=main_menu_kb())
+            await safe_edit(query, f"❌ Error: {e}", reply_markup=main_menu_kb())
         return ConversationHandler.END
 
     return DEVICE_LIST
@@ -368,7 +369,7 @@ async def device_action_handler(update: Update, context: ContextTypes.DEFAULT_TY
 async def ask_clear_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text(
+    await safe_edit(query, 
         "⚠️ **⚠️ DESTRUCTIVE ACTION ⚠️**\n\n"
         "This will **permanently erase**:\n"
         "├─ All contacts\n"
@@ -393,13 +394,13 @@ async def handle_clear_all_confirm(update: Update, context: ContextTypes.DEFAULT
 
     client = _get_client(context)
     if not client or not client.is_connected():
-        await query.edit_message_text("❌ Session lost.", reply_markup=main_menu_kb())
+        await safe_edit(query, "❌ Session lost.", reply_markup=main_menu_kb())
         return ConversationHandler.END
 
-    await query.edit_message_text("🗑️ Clearing all data... This may take a minute.")
+    await safe_edit(query, "🗑️ Clearing all data... This may take a minute.")
     result = await clear_all_data(client)
 
-    await query.edit_message_text(
+    await safe_edit(query, 
         "✅ **Clear Complete**\n\n"
         f"├─ Contacts deleted: {result['contacts']}\n"
         f"├─ DMs removed: {result['dialogs']}\n"
@@ -420,7 +421,7 @@ async def show_otp_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     client = _get_client(context)
 
     if not client or not client.is_connected():
-        await query.edit_message_text("❌ Session lost.", reply_markup=main_menu_kb())
+        await safe_edit(query, "❌ Session lost.", reply_markup=main_menu_kb())
         return ConversationHandler.END
 
     me = await client.get_me()
@@ -433,7 +434,7 @@ async def show_otp_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Phone: `{phone}`\n\n"
         f"Tap below to read the latest login code."
     )
-    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=otp_menu_kb())
+    await safe_edit(query, text, parse_mode="Markdown", reply_markup=otp_menu_kb())
     return DASHBOARD
 
 
@@ -443,10 +444,10 @@ async def read_otp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     client = _get_client(context)
 
     if not client or not client.is_connected():
-        await query.edit_message_text("❌ Session lost.", reply_markup=main_menu_kb())
+        await safe_edit(query, "❌ Session lost.", reply_markup=main_menu_kb())
         return ConversationHandler.END
 
-    await query.edit_message_text("🔍 Searching for OTP (this can take ~30s)...")
+    await safe_edit(query, "🔍 Searching for OTP (this can take ~30s)...")
 
     account_id = context.user_data.get("current_account_id")
     account = await get_account_by_id(account_id) if account_id else None
@@ -486,7 +487,7 @@ async def read_otp(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Make sure a login code was sent to this account, then tap again."
         )
 
-    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=otp_menu_kb())
+    await safe_edit(query, text, parse_mode="Markdown", reply_markup=otp_menu_kb())
     return DASHBOARD
 
 
@@ -533,18 +534,18 @@ async def _check_mail(update, context):
 async def check_mail_dash(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text("🧪 Checking mail...")
+    await safe_edit(query, "🧪 Checking mail...")
     text, _ = await _check_mail(update, context)
-    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=manage_dashboard_kb())
+    await safe_edit(query, text, parse_mode="Markdown", reply_markup=manage_dashboard_kb())
     return DASHBOARD
 
 
 async def check_mail_change(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text("🧪 Checking mail...")
+    await safe_edit(query, "🧪 Checking mail...")
     text, _ = await _check_mail(update, context)
-    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=change_mail_prompt_kb())
+    await safe_edit(query, text, parse_mode="Markdown", reply_markup=change_mail_prompt_kb())
     return WAITING_CHANGE_MAIL_EMAIL
 
 
@@ -572,7 +573,7 @@ async def ask_change_mail_email(update: Update, context: ContextTypes.DEFAULT_TY
     if saved_mail:
         text += f"\n\n📧 Saved: `{saved_mail['email']}`"
 
-    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=change_mail_prompt_kb())
+    await safe_edit(query, text, parse_mode="Markdown", reply_markup=change_mail_prompt_kb())
     return WAITING_CHANGE_MAIL_EMAIL
 
 
@@ -773,7 +774,7 @@ async def cancel_manage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from handlers.start import WELCOME_TEXT
 
     if query:
-        await query.edit_message_text(WELCOME_TEXT, parse_mode="Markdown", reply_markup=main_menu_kb())
+        await safe_edit(query, WELCOME_TEXT, parse_mode="Markdown", reply_markup=main_menu_kb())
     elif update.message:
         await update.message.reply_text(WELCOME_TEXT, parse_mode="Markdown", reply_markup=main_menu_kb())
     return ConversationHandler.END
