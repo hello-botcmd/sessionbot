@@ -4,6 +4,7 @@ from telegram import Update
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 
 from keyboards.inline import main_menu_kb
+from utils.helpers import safe_edit
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,7 @@ async def back_to_main(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text(WELCOME_TEXT, parse_mode="Markdown", reply_markup=main_menu_kb())
+    await safe_edit(query, WELCOME_TEXT, parse_mode="Markdown", reply_markup=main_menu_kb())
 
 
 def register(application):
