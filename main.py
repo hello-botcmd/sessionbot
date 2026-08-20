@@ -8,7 +8,7 @@ import sys
 
 from telegram.ext import ApplicationBuilder
 
-from config import BOT_TOKEN, API_ID, API_HASH
+from config import BOT_TOKEN, API_ID, API_HASH, VERSION, OWNER_IDS
 from database.db import db
 from handlers import start, manage, guard, my_accounts, admin
 from utils.guard import GuardManager
@@ -38,10 +38,18 @@ async def post_stop(application):
 
 
 async def error_handler(update, context):
-    """Log unhandled exceptions without killing the bot."""
+    """Log unhandled exceptions and surface them to the user in chat."""
     logger.error(
         "Exception while handling an update %s:", update, exc_info=context.error
     )
+    try:
+        if update is not None and update.effective_chat is not None:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=f"⚠️ **Error:** `{context.error}`",
+            )
+    except Exception:
+        pass
 
 
 def main():
@@ -52,11 +60,17 @@ def main():
         logger.error("❌ API_ID and API_HASH must be set in .env (from my.telegram.org)!")
         sys.exit(1)
 
+    logger.info("🚀 SessionBot v%s starting", VERSION)
     logger.info("API_ID=%s  API_HASH=%s…", API_ID, API_HASH[:4] if API_HASH else "MISSING")
     if len(API_HASH) != 32:
         logger.warning(
             "⚠️ API_HASH looks wrong (length %d, expected 32 hex chars). "
             "Sessions will fail to connect if it is incorrect.", len(API_HASH)
+        )
+    if not OWNER_IDS:
+        logger.warning(
+            "⚠️ OWNER_IDS is EMPTY — the bot is in OPEN mode (anyone can use it). "
+            "Set OWNER_IDS in .env to restrict access."
         )
 
     application = (
