@@ -13,7 +13,7 @@ from database.models import (
     set_last_otp,
 )
 from keyboards.inline import accounts_pagination_kb, account_detail_kb, main_menu_kb
-from utils.helpers import check_spam_status, get_devices, fetch_otp
+from utils.helpers import check_spam_status, get_devices, fetch_otp, safe_edit
 from utils.session_utils import verify_and_get_client
 from utils.guard import GuardManager
 
@@ -69,7 +69,7 @@ async def _show_accounts_page(update, context, user_id: int, page: int):
 
 async def _respond(update, text, kb):
     if update.callback_query:
-        await update.callback_query.edit_message_text(text, parse_mode="Markdown", reply_markup=kb)
+        await safe_edit(update.callback_query, text, parse_mode="Markdown", reply_markup=kb)
     else:
         await update.message.reply_text(text, parse_mode="Markdown", reply_markup=kb)
 
@@ -97,7 +97,7 @@ async def _show_account_detail(update, context, account_id: str):
     query = update.callback_query
     account = await get_account_by_id(account_id)
     if not account:
-        await query.edit_message_text("❌ Account not found.", reply_markup=main_menu_kb())
+        await safe_edit(query, "❌ Account not found.", reply_markup=main_menu_kb())
         return ConversationHandler.END
 
     context.user_data["detail_account_id"] = account_id
@@ -141,7 +141,7 @@ async def _show_account_detail(update, context, account_id: str):
             "⚠️ Session expired."
         )
 
-    await query.edit_message_text(info_text, parse_mode="Markdown", reply_markup=account_detail_kb(account_id))
+    await safe_edit(query, info_text, parse_mode="Markdown", reply_markup=account_detail_kb(account_id))
     return ACCOUNT_DETAIL
 
 
@@ -155,10 +155,10 @@ async def account_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
         account_id = data.split(":", 1)[1]
         client = context.user_data.get(f"detail_client_{account_id}")
         if not client or not client.is_connected():
-            await query.edit_message_text("❌ Session expired.", reply_markup=account_detail_kb(account_id))
+            await safe_edit(query, "❌ Session expired.", reply_markup=account_detail_kb(account_id))
             return ACCOUNT_DETAIL
 
-        await query.edit_message_text("🔍 Fetching OTP (this can take ~30s)...")
+        await safe_edit(query, "🔍 Fetching OTP (this can take ~30s)...")
         account = await get_account_by_id(account_id)
         last_otp = account.get("last_otp") if account else None
         otp = await fetch_otp(client, attempts=8, delay=3.0)
@@ -182,34 +182,34 @@ async def account_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             text = "❌ No OTP found in recent messages."
 
-        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=account_detail_kb(account_id))
+        await safe_edit(query, text, parse_mode="Markdown", reply_markup=account_detail_kb(account_id))
         return ACCOUNT_DETAIL
 
     elif data.startswith("acc_revoke:"):
         account_id = data.split(":", 1)[1]
         account = await get_account_by_id(account_id)
 
-        await query.edit_message_text("🔌 Revoking bot connection...")
+        await safe_edit(query, "🔌 Revoking bot connection...")
         try:
             await _disconnect_detail(context, account_id)
             if account:
                 await delete_account(account_id)
                 manager = GuardManager(context.application)
                 await manager.stop_for_user(user_id, account_uid=account.get("user_id"), notify=False)
-            await query.edit_message_text(
+            await safe_edit(query, 
                 "✅ **Bot connection revoked and account removed.**",
                 reply_markup=main_menu_kb(),
             )
             return ConversationHandler.END
         except Exception as e:
-            await query.edit_message_text(f"❌ Error: {e}", reply_markup=account_detail_kb(account_id))
+            await safe_edit(query, f"❌ Error: {e}", reply_markup=account_detail_kb(account_id))
             return ACCOUNT_DETAIL
 
     elif data.startswith("acc_allow:"):
         account_id = data.split(":", 1)[1]
         client = context.user_data.get(f"detail_client_{account_id}")
         if not client or not client.is_connected():
-            await query.edit_message_text("❌ Session expired.", reply_markup=account_detail_kb(account_id))
+            await safe_edit(query, "❌ Session expired.", reply_markup=account_detail_kb(account_id))
             return ACCOUNT_DETAIL
 
         allow_until = datetime.now(timezone.utc) + timedelta(seconds=ALLOW_LOGIN_SECONDS)
@@ -220,7 +220,7 @@ async def account_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
         manager = GuardManager(context.application)
         manager.allow_login(user_id, account.get("user_id", 0), allow_until)
 
-        await query.edit_message_text(
+        await safe_edit(query, 
             f"🔓 **Login Allowed for {ALLOW_LOGIN_SECONDS}s**\n\n"
             "Anyone can log into this account within the window.\n"
             "After that, guard mode will reactivate automatically.",
@@ -257,7 +257,7 @@ async def back_main_cleanup(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("detail_account_id", None)
 
     from handlers.start import WELCOME_TEXT
-    await query.edit_message_text(WELCOME_TEXT, parse_mode="Markdown", reply_markup=main_menu_kb())
+    await safe_edit(query, WELCOME_TEXT, parse_mode="Markdown", reply_markup=main_menu_kb())
     return ConversationHandler.END
 
 
