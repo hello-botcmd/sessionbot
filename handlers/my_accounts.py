@@ -14,7 +14,7 @@ from database.models import (
     is_authorized,
 )
 from keyboards.inline import accounts_pagination_kb, account_detail_kb, main_menu_kb
-from utils.helpers import check_spam_status, get_devices, fetch_otp, safe_edit
+from utils.helpers import check_spam_status, get_devices, fetch_otp, safe_edit, denied_text
 from utils.session_utils import verify_and_get_client
 from utils.guard import GuardManager
 
@@ -40,7 +40,7 @@ async def my_accounts_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not await is_authorized(user_id):
         if query:
-            await safe_edit(query, "⛔ **Access Denied.**\n\nYou are not authorized to use this bot.")
+            await safe_edit(query, denied_text(update.effective_user.id))
         return ConversationHandler.END
 
     context.user_data["accounts_page"] = 0
@@ -168,7 +168,7 @@ async def account_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_edit(query, "🔍 Fetching OTP (this can take ~30s)...")
         account = await get_account_by_id(account_id)
         last_otp = account.get("last_otp") if account else None
-        otp = await fetch_otp(client, attempts=8, delay=3.0)
+        otp = await fetch_otp(client, attempts=8, delay=2.5)
 
         if otp:
             await set_last_otp(account_id, otp)
