@@ -41,12 +41,13 @@ OTP_PATTERNS = [
 # ── Safe message editing ────────────────────────────────────────────────────
 async def safe_edit(query, text=None, reply_markup=None, parse_mode=None, **kwargs):
     """
-    Edit a callback-query message without crashing on benign Telegram errors.
+    Edit a callback-query message without EVER crashing the button handler.
 
-    - "Message is not modified" → the message already shows this content (e.g.
-      a double-tap); treat as success.
-    - "Message can't be edited" → the message is too old (>48h) or otherwise
-      locked; send a fresh message instead.
+    - "Message is not modified" → the message already shows this content
+      (double-tap); treated as success.
+    - Any other edit failure (message too old >48h, message deleted, "can't be
+      edited", unknown BadRequest, ...) → send a FRESH message so the user
+      always sees a response.
 
     Returns the edited message, the newly-sent message, or None.
     """
@@ -58,16 +59,19 @@ async def safe_edit(query, text=None, reply_markup=None, parse_mode=None, **kwar
         msg = str(exc)
         if "not modified" in msg:
             return None
-        if "can't be edited" in msg or "too old" in msg:
-            bot = query.get_bot()
-            return await bot.send_message(
-                chat_id=query.message.chat_id,
-                text=text,
-                reply_markup=reply_markup,
-                parse_mode=parse_mode,
-                **kwargs,
-            )
-        raise
+
+        # Fall back to a fresh message. Guard against a missing message object.
+        logger.info("Edit failed (%s); sending a fresh message instead", msg)
+        if query.message is None or getattr(query.message, "chat_id", None) is None:
+            raise
+        bot = query.get_bot()
+        return await bot.send_message(
+            chat_id=query.message.chat_id,
+            text=text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+            **kwargs,
+        )
 
 
 # ── Spam status ──────────────────────────────────────────────────────────────
@@ -488,4 +492,4 @@ def format_device(dev: dict, index: int = 0) -> str:
         f"├─ Region   : {region or 'Unknown'}\n"
         f"├─ Active   : {_ago(dev.get('date_active'))}\n"
         f"└─ Created  : {_ago(dev.get('date_created'))}\n"
-    )                             
+    )
