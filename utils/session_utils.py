@@ -12,6 +12,7 @@ No guessing. Every format identified by its structural signature.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 import sqlite3
@@ -22,8 +23,17 @@ from typing import Any
 
 from telethon import TelegramClient
 from telethon.crypto import AuthKey
-from telethon.errors import FloodWaitError, RPCError
+from telethon.errors import (
+    AuthKeyDuplicatedError,
+    AuthKeyInvalidError,
+    AuthKeyUnregisteredError,
+    FloodWaitError,
+    RPCError,
+    UnauthorizedError,
+)
 from telethon.sessions import StringSession
+
+from config import MTPROTO_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +92,6 @@ class SessionParts:
 
 # ── Parser: raw hex auth_key (requires explicit dc_id) ─────────────────────
 
-
 def parse_raw_hex_auth_key(hex_key: str, dc_id: int) -> SessionParts:
     value = hex_key.strip()
     if value.startswith(("0x", "0X")):
@@ -102,7 +111,6 @@ def parse_raw_hex_auth_key(hex_key: str, dc_id: int) -> SessionParts:
 
 
 # ── Parser: Telethon StringSession ────────────────────────────────────────
-
 
 def parse_telethon_string(value: str) -> SessionParts:
     value = value.strip()
@@ -186,7 +194,6 @@ def parse_pyrogram_string(value: str) -> SessionParts:
 
 # ── Parser: SQLite .session file ──────────────────────────────────────────
 
-
 def parse_session_file(path: str | Path) -> SessionParts:
     path = Path(path)
     if not path.is_file():
@@ -241,7 +248,6 @@ def parse_session_file(path: str | Path) -> SessionParts:
 
 # ── Auto-detect entry point ────────────────────────────────────────────────
 
-
 def parse_session(value: str, dc_id: int | None = None) -> SessionParts:
     """
     Auto-detect format: Telethon → Pyrogram → raw hex.
@@ -280,16 +286,48 @@ def parse_session(value: str, dc_id: int | None = None) -> SessionParts:
 
 # ── Client creation & verification ────────────────────────────────────────
 
-
 def create_telethon_client(parts: SessionParts, api_id: int, api_hash: str) -> TelegramClient:
     parts.validate()
-    return TelegramClient(parts.to_telethon_session(), api_id, api_hash)
+    return TelegramClient(
+        parts.to_telethon_session(),
+        api_id,
+        api_hash,
+        timeout=15,
+        request_retries=2,
+        connection_retries=2,
+        retry_delay=1,
+        auto_reconnect=False,
+    )
 
 
-async def verify_client(client: TelegramClient) -> dict[str, Any]:
-    """Connect and verify session is authorized. Returns info dict."""
-    await client.connect()
-    try:
+def _friendly_error(exc: Exception) -> str:
+    """Turn common Telethon errors into actionable messages."""
+    if isinstance(exc, AuthKeyUnregisteredError):
+        return (
+            "AUTH_KEY_UNREGISTERED — this session was created with a "
+            "DIFFERENT API_ID/API_HASH. Put the SAME API_ID/API_HASH in .env "
+            "that was used when the session was created."
+        )
+    if isinstance(exc, AuthKeyDuplicatedError):
+        return (
+            "AUTH_KEY_DUPLICATED — API_ID mismatch (the session belongs to a "
+            "different api_id) or the key is already logged in elsewhere."
+        )
+    if isinstance(exc, AuthKeyInvalidError):
+        return "AUTH_KEY_INVALID — the session key is invalid or has been revoked."
+    if isinstance(exc, UnauthorizedError):
+        return f"Unauthorized (401): {exc}"
+    if isinstance(exc, FloodWaitError):
+        return f"Rate-limited by Telegram. Wait {exc.seconds}s and retry."
+    return str(exc)
+
+
+async def verify_client(client: TelegramClient, timeout: float | None = None) -> dict[str, Any]:
+    """Connect and verify the session is authorized. Returns an info dict."""
+    timeout = timeout or MTPROTO_TIMEOUT
+
+    async def _do():
+        await client.connect()
         if not await client.is_user_authorized():
             raise ValueError("Session is not authorized — auth_key may be expired.")
         me = await client.get_me()
@@ -302,6 +340,17 @@ async def verify_client(client: TelegramClient) -> dict[str, Any]:
             "last_name": getattr(me, "last_name", ""),
             "username": getattr(me, "username", None),
         }
+
+    try:
+        return await asyncio.wait_for(_do(), timeout=timeout)
+    except asyncio.TimeoutError:
+        if client.is_connected():
+            await client.disconnect()
+        raise ConnectionError(
+            f"Timed out after {timeout}s reaching Telegram's MTProto servers. "
+            "Check that your VPS can reach 149.154.x.x:443 / 91.108.x.x:443 "
+            "(firewall / provider block) and that API_ID/API_HASH are correct."
+        )
     except Exception:
         if client.is_connected():
             await client.disconnect()
@@ -356,11 +405,14 @@ async def verify_and_get_client(
     except ValueError as exc:
         return None, str(exc)
     except RPCError as exc:
-        return None, f"Telegram API error: {exc}"
+        logger.warning("Verify failed (RPC): %s", exc)
+        return None, _friendly_error(exc)
     except ConnectionError as exc:
-        return None, f"Network error: {exc}"
+        logger.warning("Verify failed (network): %s", exc)
+        return None, str(exc)
     except TimeoutError as exc:
-        return None, f"Connection timed out: {exc}"
+        logger.warning("Verify failed (timeout): %s", exc)
+        return None, str(exc)
     except Exception as exc:
         logger.exception("Unexpected error during verification")
         return None, f"Unexpected error: {exc}"
@@ -414,4 +466,4 @@ async def _try_dc(
     except FloodWaitError as exc:
         return None, f"Rate-limited on DC-{dc_id}. Wait {exc.seconds}s."
     except Exception as exc:
-        return None, f"DC-{dc_id}: {exc}"
+        return None, f"DC-{dc_id}: {_friendly_error(exc)}"
