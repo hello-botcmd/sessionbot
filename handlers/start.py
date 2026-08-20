@@ -3,6 +3,8 @@ import logging
 from telegram import Update
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 
+from config import VERSION
+from database.models import is_authorized
 from keyboards.inline import main_menu_kb
 from utils.helpers import safe_edit
 
@@ -24,8 +26,12 @@ WELCOME_TEXT = (
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command."""
     user = update.effective_user
+    if not await is_authorized(user.id):
+        await update.message.reply_text("⛔ **Access Denied.**\n\nYou are not authorized to use this bot.")
+        return
+
     first_name = user.first_name if user else "User"
-    text = f"👋 Hello **{first_name}**!\n\n{WELCOME_TEXT}"
+    text = f"👋 Hello **{first_name}**!\n\n{WELCOME_TEXT}\n\n🔖 v{VERSION}"
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=main_menu_kb())
 
 
@@ -39,6 +45,9 @@ async def back_to_main(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     query = update.callback_query
     await query.answer()
+    if not await is_authorized(update.effective_user.id):
+        await safe_edit(query, "⛔ **Access Denied.**\n\nYou are not authorized to use this bot.")
+        return
     await safe_edit(query, WELCOME_TEXT, parse_mode="Markdown", reply_markup=main_menu_kb())
 
 
