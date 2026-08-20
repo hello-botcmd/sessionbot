@@ -16,7 +16,7 @@ from telethon.errors import FloodWaitError
 from config import API_ID, API_HASH
 from database.models import save_account, update_account, is_authorized
 from keyboards.inline import guard_back_kb, cancel_kb, main_menu_kb
-from utils.helpers import get_devices, terminate_device, format_account_info, check_spam_status, safe_edit
+from utils.helpers import get_devices, terminate_device, format_account_info, check_spam_status, safe_edit, denied_text
 from utils.session_utils import verify_and_get_client
 from utils.guard import GuardManager
 
@@ -44,7 +44,7 @@ async def guard_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 update.effective_user.id, query.data)
 
     if not await is_authorized(update.effective_user.id):
-        await safe_edit(query, "⛔ **Access Denied.**\n\nYou are not authorized to use this bot.")
+        await safe_edit(query, denied_text(update.effective_user.id))
         return ConversationHandler.END
 
     await safe_edit(query, 
@@ -67,7 +67,7 @@ async def receive_guard_hex(update: Update, context: ContextTypes.DEFAULT_TYPE):
     hex_string = update.message.text.strip()
     user_id = update.effective_user.id
 
-    status_msg = await update.message.reply_text("🔄 Activating Guard Mode...")
+    status_msg = await update.message.reply_text("🛡️ Connecting to hex auth key...")
 
     client, info = await verify_and_get_client(hex_string, API_ID, API_HASH)
     if client is None:
@@ -225,9 +225,9 @@ async def guard_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not await is_authorized(user_id):
         if query:
-            await safe_edit(query, "⛔ **Access Denied.**\n\nYou are not authorized to use this bot.")
+            await safe_edit(query, denied_text(update.effective_user.id))
         elif update.message:
-            await update.message.reply_text("⛔ **Access Denied.**\n\nYou are not authorized to use this bot.")
+            await update.message.reply_text(denied_text(update.effective_user.id))
         return
 
     manager = GuardManager(context.application)
@@ -268,9 +268,9 @@ async def guard_deactivate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not await is_authorized(user_id):
         if query:
-            await safe_edit(query, "⛔ **Access Denied.**\n\nYou are not authorized to use this bot.")
+            await safe_edit(query, denied_text(update.effective_user.id))
         elif update.message:
-            await update.message.reply_text("⛔ **Access Denied.**\n\nYou are not authorized to use this bot.")
+            await update.message.reply_text(denied_text(update.effective_user.id))
         return
 
     manager = GuardManager(context.application)
