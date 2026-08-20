@@ -107,11 +107,11 @@ def cancel_kb(action: str):
     return InlineKeyboardMarkup(kb)
 
 
-def change_mail_prompt_kb():
-    """Prompt for email/app-password + a quick mail checker."""
+def change_mail_confirm_kb():
+    """Yes / Cancel for the change-login-mail confirmation."""
     kb = [
-        [InlineKeyboardButton("🧪 Check Saved Mail", callback_data="mail_check")],
-        [InlineKeyboardButton("❌ Cancel", callback_data="cancel_change_mail")],
+        [InlineKeyboardButton("✅ Yes, Change Mail", callback_data="cm_yes")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="cm_no")],
     ]
     return InlineKeyboardMarkup(kb)
 
