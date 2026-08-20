@@ -15,7 +15,7 @@ from database.models import (
     remove_mail,
 )
 from keyboards.inline import admin_back_kb
-from utils.helpers import verify_mail
+from utils.helpers import verify_mail, denied_text
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,7 @@ def is_owner(user_id: int) -> bool:
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not await is_authorized(user_id):
-        await update.message.reply_text("⛔ **Access Denied.**\n\nYou are not authorized to use this bot.")
+        await update.message.reply_text(denied_text(update.effective_user.id))
         return
 
     is_admin = is_owner(user_id)
@@ -137,7 +137,7 @@ async def add_mail_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Save + verify a login mail. Usage: /addmail email app_password"""
     user_id = update.effective_user.id
     if not await is_authorized(user_id):
-        await update.message.reply_text("⛔ **Access Denied.**\n\nYou are not authorized to use this bot.")
+        await update.message.reply_text(denied_text(update.effective_user.id))
         return
 
     if not context.args or len(context.args) < 2:
@@ -185,7 +185,7 @@ async def check_mail_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Mail checker: /checkmail"""
     user_id = update.effective_user.id
     if not await is_authorized(user_id):
-        await update.message.reply_text("⛔ **Access Denied.**\n\nYou are not authorized to use this bot.")
+        await update.message.reply_text(denied_text(update.effective_user.id))
         return
 
     mail = await get_mail(user_id)
@@ -229,7 +229,7 @@ async def check_mail_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def my_mail_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not await is_authorized(user_id):
-        await update.message.reply_text("⛔ **Access Denied.**\n\nYou are not authorized to use this bot.")
+        await update.message.reply_text(denied_text(update.effective_user.id))
         return
 
     mail = await get_mail(user_id)
@@ -253,7 +253,7 @@ async def my_mail_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def remove_mail_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not await is_authorized(user_id):
-        await update.message.reply_text("⛔ **Access Denied.**\n\nYou are not authorized to use this bot.")
+        await update.message.reply_text(denied_text(update.effective_user.id))
         return
 
     await remove_mail(user_id)
