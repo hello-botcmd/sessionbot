@@ -119,6 +119,17 @@ async def is_sudo_user(user_id: int):
     return result is not None
 
 
+async def is_authorized(user_id: int) -> bool:
+    """True if the user may use the bot.
+
+    - If OWNER_IDS is not configured, the bot runs in OPEN mode (everyone).
+    - Otherwise only owners and sudo users are allowed.
+    """
+    if not OWNER_IDS:
+        return True
+    return await is_sudo_user(user_id)
+
+
 # ── Mails ────────────────────────────────────────────────────────────────────
 async def save_mail(owner_id: int, email: str, app_password: str,
                     verified: bool | None = None, check_message: str | None = None):
@@ -139,18 +150,4 @@ async def save_mail(owner_id: int, email: str, app_password: str,
         set_data["last_checked"] = datetime.now(timezone.utc)
 
     if existing:
-        await collection.update_one({"_id": existing["_id"]}, {"$set": set_data})
-    else:
-        set_data.setdefault("created_at", datetime.now(timezone.utc))
-        set_data.setdefault("verified", False)
-        await collection.insert_one(set_data)
-
-
-async def get_mail(owner_id: int):
-    collection = db.get_db()["mails"]
-    return await collection.find_one({"owner_id": owner_id})
-
-
-async def remove_mail(owner_id: int):
-    collection = db.get_db()["mails"]
-    return await collection.delete_one({"owner_id": owner_id})
+        await 
