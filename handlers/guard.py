@@ -14,7 +14,7 @@ from telegram.ext import (
 from telethon.errors import FloodWaitError
 
 from config import API_ID, API_HASH
-from database.models import save_account, update_account
+from database.models import save_account, update_account, is_authorized
 from keyboards.inline import guard_back_kb, cancel_kb, main_menu_kb
 from utils.helpers import get_devices, terminate_device, format_account_info, check_spam_status, safe_edit
 from utils.session_utils import verify_and_get_client
@@ -42,6 +42,10 @@ async def guard_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     logger.info("🛡️ Guard button clicked by %s (callback=%s)",
                 update.effective_user.id, query.data)
+
+    if not await is_authorized(update.effective_user.id):
+        await safe_edit(query, "⛔ **Access Denied.**\n\nYou are not authorized to use this bot.")
+        return ConversationHandler.END
 
     await safe_edit(query, 
         "🛡️ **Safe / Guard Account**\n\n"
@@ -219,6 +223,13 @@ async def guard_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
 
     user_id = update.effective_user.id
+    if not await is_authorized(user_id):
+        if query:
+            await safe_edit(query, "⛔ **Access Denied.**\n\nYou are not authorized to use this bot.")
+        elif update.message:
+            await update.message.reply_text("⛔ **Access Denied.**\n\nYou are not authorized to use this bot.")
+        return
+
     manager = GuardManager(context.application)
     entries = manager.list_for_user(user_id)
 
@@ -255,6 +266,13 @@ async def guard_deactivate(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
 
     user_id = update.effective_user.id
+    if not await is_authorized(user_id):
+        if query:
+            await safe_edit(query, "⛔ **Access Denied.**\n\nYou are not authorized to use this bot.")
+        elif update.message:
+            await update.message.reply_text("⛔ **Access Denied.**\n\nYou are not authorized to use this bot.")
+        return
+
     manager = GuardManager(context.application)
     stopped = await manager.stop_for_user(user_id)
 
@@ -310,4 +328,4 @@ def register(application):
     application.add_handler(CallbackQueryHandler(guard_deactivate, pattern=r"^guard_deactivate$"))
     application.add_handler(CallbackQueryHandler(guard_status, pattern=r"^guard_status$"))
     application.add_handler(CommandHandler("guardstatus", guard_status))
-    application.add_handler(CommandHandler("stopguard", guard_deactivate))                  
+    application.add_handler(CommandHandler("stopguard", guard_deactivate))
