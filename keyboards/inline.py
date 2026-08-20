@@ -37,8 +37,8 @@ def manage_dashboard_kb():
     return InlineKeyboardMarkup(kb)
 
 
-def device_dashboard_kb(devices: list):
-    """One button per device + revoke-all + revoke-bot + back."""
+def device_dashboard_kb(devices: list, guard_active: bool = False):
+    """One button per device + guard toggle + revoke-all + revoke-bot + back."""
     kb = []
     for i, dev in enumerate(devices):
         model = (dev.get("device_model") or "Unknown")[:18]
@@ -49,6 +49,10 @@ def device_dashboard_kb(devices: list):
 
     kb.append([
         InlineKeyboardButton("🔌 Terminate All Other Sessions", callback_data="revoke_all"),
+    ])
+    guard_label = "🛡️ Guard: ON" if guard_active else "🛡️ Guard: OFF"
+    kb.append([
+        InlineKeyboardButton(guard_label, callback_data="guard_toggle"),
     ])
     kb.append([
         InlineKeyboardButton("🔴 Revoke Bot Connection", callback_data="revoke_bot"),
