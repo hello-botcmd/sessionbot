@@ -79,11 +79,13 @@ class SessionParts:
 
     def to_telethon_session(self) -> StringSession:
         self.validate()
+        # Always use the current, verified DC address (ignoring any stale IP
+        # stored inside old session strings) so connect never hangs on a dead IP.
         address, default_port = DC_IPS[self.dc_id]
         session = StringSession()
         session.set_dc(
             self.dc_id,
-            self.server_address or address,
+            address,
             self.port or default_port,
         )
         session.auth_key = AuthKey(self.auth_key)
@@ -288,14 +290,17 @@ def parse_session(value: str, dc_id: int | None = None) -> SessionParts:
 
 def create_telethon_client(parts: SessionParts, api_id: int, api_hash: str) -> TelegramClient:
     parts.validate()
+    # Aggressive timeouts so parsing/connecting is fast. connection_retries=1
+    # and retry_delay=0 mean a dead DC fails in ~timeout seconds instead of
+    # retrying for a minute.
     return TelegramClient(
         parts.to_telethon_session(),
         api_id,
         api_hash,
-        timeout=15,
-        request_retries=2,
-        connection_retries=2,
-        retry_delay=1,
+        timeout=10,
+        request_retries=1,
+        connection_retries=1,
+        retry_delay=0,
         auto_reconnect=False,
     )
 
@@ -377,8 +382,9 @@ async def verify_and_get_client(
     # Step 1: Check if raw hex with no dc_id → probe
     if _looks_like_raw_hex(raw_input) and dc_id is None:
         last_error = "Could not authenticate on any datacenter."
+        probe_timeout = min(MTPROTO_TIMEOUT, 10)
         for probe_dc in DC_PROBE_ORDER:
-            result = await _try_dc(raw_input, api_id, api_hash, probe_dc)
+            result = await _try_dc(raw_input, api_id, api_hash, probe_dc, probe_timeout)
             if result[0] is not None:
                 return result
             if isinstance(result[1], str):
@@ -444,7 +450,7 @@ def _looks_like_raw_hex(value: str) -> bool:
 
 
 async def _try_dc(
-    raw_input: str, api_id: int, api_hash: str, dc_id: int
+    raw_input: str, api_id: int, api_hash: str, dc_id: int, timeout: float | None = None
 ) -> tuple[TelegramClient | None, dict[str, Any] | str]:
     """Try authenticating against a specific DC."""
     try:
@@ -453,7 +459,7 @@ async def _try_dc(
             clean = clean[2:]
         parts = parse_raw_hex_auth_key(clean, dc_id)
         client = create_telethon_client(parts, api_id, api_hash)
-        info = await verify_client(client)
+        info = await verify_client(client, timeout=timeout)
         try:
             session_string = client.session.save()
         except Exception:
