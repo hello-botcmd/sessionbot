@@ -16,7 +16,7 @@ from telethon.errors import FloodWaitError
 from config import API_ID, API_HASH
 from database.models import save_account, update_account
 from keyboards.inline import guard_back_kb, cancel_kb, main_menu_kb
-from utils.helpers import get_devices, terminate_device, format_account_info, check_spam_status
+from utils.helpers import get_devices, terminate_device, format_account_info, check_spam_status, safe_edit
 from utils.session_utils import verify_and_get_client
 from utils.guard import GuardManager
 
@@ -40,7 +40,7 @@ async def _notify(application, entry: dict, text: str):
 async def guard_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text(
+    await safe_edit(query, 
         "🛡️ **Safe / Guard Account**\n\n"
         "Guard mode **monitors** your account and:\n"
         "├─ Keeps your session alive\n"
@@ -241,7 +241,7 @@ async def guard_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         kb = guard_back_kb()
 
     if query:
-        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=kb)
+        await safe_edit(query, text, parse_mode="Markdown", reply_markup=kb)
     elif update.message:
         await update.message.reply_text(text, parse_mode="Markdown", reply_markup=kb)
 
@@ -262,7 +262,7 @@ async def guard_deactivate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     if query:
-        await query.edit_message_text(msg, parse_mode="Markdown", reply_markup=main_menu_kb())
+        await safe_edit(query, msg, parse_mode="Markdown", reply_markup=main_menu_kb())
     elif update.message:
         await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=main_menu_kb())
 
@@ -274,7 +274,7 @@ async def cancel_guard(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     from handlers.start import WELCOME_TEXT
     if query:
-        await query.edit_message_text(WELCOME_TEXT, parse_mode="Markdown", reply_markup=main_menu_kb())
+        await safe_edit(query, WELCOME_TEXT, parse_mode="Markdown", reply_markup=main_menu_kb())
     elif update.message:
         await update.message.reply_text(WELCOME_TEXT, parse_mode="Markdown", reply_markup=main_menu_kb())
     return ConversationHandler.END
