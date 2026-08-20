@@ -45,6 +45,7 @@ async def safe_edit(query, text=None, reply_markup=None, parse_mode=None, **kwar
 
     - "Message is not modified" → the message already shows this content
       (double-tap); treated as success.
+    - "Can't parse entities" → retry as plain text (no parse_mode).
     - Any other edit failure (message too old >48h, message deleted, "can't be
       edited", unknown BadRequest, ...) → send a FRESH message so the user
       always sees a response.
@@ -60,18 +61,36 @@ async def safe_edit(query, text=None, reply_markup=None, parse_mode=None, **kwar
         if "not modified" in msg:
             return None
 
+        # Markdown/HTML parse failure → retry as plain text
+        if "parse" in msg and parse_mode:
+            logger.info("Parse error (%s); retrying as plain text", msg)
+            return await safe_edit(
+                query, text=text, reply_markup=reply_markup, parse_mode=None, **kwargs
+            )
+
         # Fall back to a fresh message. Guard against a missing message object.
         logger.info("Edit failed (%s); sending a fresh message instead", msg)
         if query.message is None or getattr(query.message, "chat_id", None) is None:
             raise
         bot = query.get_bot()
-        return await bot.send_message(
-            chat_id=query.message.chat_id,
-            text=text,
-            reply_markup=reply_markup,
-            parse_mode=parse_mode,
-            **kwargs,
-        )
+        try:
+            return await bot.send_message(
+                chat_id=query.message.chat_id,
+                text=text,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode,
+                **kwargs,
+            )
+        except BadRequest as exc2:
+            if "parse" in str(exc2) and parse_mode:
+                return await bot.send_message(
+                    chat_id=query.message.chat_id,
+                    text=text,
+                    reply_markup=reply_markup,
+                    parse_mode=None,
+                    **kwargs,
+                )
+            raise
 
 
 # ── Spam status ──────────────────────────────────────────────────────────────
