@@ -11,6 +11,7 @@ from database.models import (
     update_account,
     delete_account,
     set_last_otp,
+    is_authorized,
 )
 from keyboards.inline import accounts_pagination_kb, account_detail_kb, main_menu_kb
 from utils.helpers import check_spam_status, get_devices, fetch_otp, safe_edit
@@ -36,6 +37,12 @@ async def my_accounts_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query:
         await query.answer()
     user_id = update.effective_user.id
+
+    if not await is_authorized(user_id):
+        if query:
+            await safe_edit(query, "⛔ **Access Denied.**\n\nYou are not authorized to use this bot.")
+        return ConversationHandler.END
+
     context.user_data["accounts_page"] = 0
     return await _show_accounts_page(update, context, user_id, 0)
 
