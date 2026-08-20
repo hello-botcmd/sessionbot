@@ -1,4 +1,4 @@
-        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 # Callback-data convention: values are separated with ":" (never "|", which is a
 # regex metacharacter and has caused silent handler-swallowing bugs).
