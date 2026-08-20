@@ -9,6 +9,7 @@ from database.models import (
     remove_sudo_user,
     get_all_sudo_users,
     is_sudo_user,
+    is_authorized,
     save_mail,
     get_mail,
     remove_mail,
@@ -25,6 +26,10 @@ def is_owner(user_id: int) -> bool:
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    if not await is_authorized(user_id):
+        await update.message.reply_text("⛔ **Access Denied.**\n\nYou are not authorized to use this bot.")
+        return
+
     is_admin = is_owner(user_id)
     is_sudo = await is_sudo_user(user_id)
 
@@ -131,6 +136,9 @@ async def sudo_list_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def add_mail_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Save + verify a login mail. Usage: /addmail email app_password"""
     user_id = update.effective_user.id
+    if not await is_authorized(user_id):
+        await update.message.reply_text("⛔ **Access Denied.**\n\nYou are not authorized to use this bot.")
+        return
 
     if not context.args or len(context.args) < 2:
         await update.message.reply_text(
@@ -176,6 +184,10 @@ async def add_mail_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def check_mail_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Mail checker: /checkmail"""
     user_id = update.effective_user.id
+    if not await is_authorized(user_id):
+        await update.message.reply_text("⛔ **Access Denied.**\n\nYou are not authorized to use this bot.")
+        return
+
     mail = await get_mail(user_id)
     if not mail:
         await update.message.reply_text(
@@ -216,6 +228,10 @@ async def check_mail_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def my_mail_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    if not await is_authorized(user_id):
+        await update.message.reply_text("⛔ **Access Denied.**\n\nYou are not authorized to use this bot.")
+        return
+
     mail = await get_mail(user_id)
     if mail:
         verified = "✅ verified" if mail.get("verified") else "⚠️ not verified"
@@ -236,6 +252,10 @@ async def my_mail_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def remove_mail_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    if not await is_authorized(user_id):
+        await update.message.reply_text("⛔ **Access Denied.**\n\nYou are not authorized to use this bot.")
+        return
+
     await remove_mail(user_id)
     await update.message.reply_text("✅ Saved mail removed.")
 
