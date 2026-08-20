@@ -1,10 +1,12 @@
-
+import logging
 from datetime import datetime, timezone
 
 from bson import ObjectId
 
 from config import OWNER_IDS
 from database.db import db
+
+logger = logging.getLogger(__name__)
 
 
 # ── Accounts ──────────────────────────────────────────────────────────────────
@@ -98,6 +100,7 @@ async def add_sudo_user(sudo_id: int, added_by: int):
         "added_by": added_by,
         "added_at": datetime.now(timezone.utc),
     })
+    logger.info("Sudo user %s added by %s", sudo_id, added_by)
     return True
 
 
@@ -128,7 +131,10 @@ async def is_authorized(user_id: int) -> bool:
     """
     if not OWNER_IDS:
         return True
-    return await is_sudo_user(user_id)
+    allowed = await is_sudo_user(user_id)
+    if not allowed:
+        logger.info("Access denied for user %s (not owner/sudo)", user_id)
+    return allowed
 
 
 # ── Mails ────────────────────────────────────────────────────────────────────
