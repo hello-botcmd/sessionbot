@@ -9,6 +9,7 @@ import time
 from datetime import datetime, timezone
 from typing import Optional
 
+from telegram.error import BadRequest
 from telethon import TelegramClient, password as pwd_mod
 from telethon.tl import types
 from telethon.tl.functions.account import (
@@ -35,6 +36,38 @@ OTP_PATTERNS = [
     re.compile(r"confirmation\s*code\s*[:.]\s*(\d{4,6})", re.IGNORECASE),
     re.compile(r"\bcode\s*[:.]\s*(\d{4,6})\b", re.IGNORECASE),
 ]
+
+
+# ── Safe message editing ────────────────────────────────────────────────────
+async def safe_edit(query, text=None, reply_markup=None, parse_mode=None, **kwargs):
+    """
+    Edit a callback-query message without crashing on benign Telegram errors.
+
+    - "Message is not modified" → the message already shows this content (e.g.
+      a double-tap); treat as success.
+    - "Message can't be edited" → the message is too old (>48h) or otherwise
+      locked; send a fresh message instead.
+
+    Returns the edited message, the newly-sent message, or None.
+    """
+    try:
+        return await query.edit_message_text(
+            text=text, reply_markup=reply_markup, parse_mode=parse_mode, **kwargs
+        )
+    except BadRequest as exc:
+        msg = str(exc)
+        if "not modified" in msg:
+            return None
+        if "can't be edited" in msg or "too old" in msg:
+            bot = query.get_bot()
+            return await bot.send_message(
+                chat_id=query.message.chat_id,
+                text=text,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode,
+                **kwargs,
+            )
+        raise
 
 
 # ── Spam status ──────────────────────────────────────────────────────────────
@@ -455,4 +488,4 @@ def format_device(dev: dict, index: int = 0) -> str:
         f"├─ Region   : {region or 'Unknown'}\n"
         f"├─ Active   : {_ago(dev.get('date_active'))}\n"
         f"└─ Created  : {_ago(dev.get('date_created'))}\n"
-    )
+    )                             
