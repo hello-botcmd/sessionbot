@@ -311,9 +311,29 @@ async def device_action_handler(update: Update, context: ContextTypes.DEFAULT_TY
     elif data.startswith("dev_yes:"):
         idx = int(data.split(":", 1)[1])
         if 0 <= idx < len(devices):
-            dev_hash = devices[idx]["hash"]
+            dev = devices[idx]
             await safe_edit(query, "🔄 Terminating device...")
-            ok = await terminate_device(client, dev_hash)
+
+            if dev.get("current"):
+                # Terminating the bot's OWN session → log out of the account.
+                ok = await terminate_current_session(client)
+                if ok:
+                    account_id = context.user_data.get("current_account_id")
+                    if account_id:
+                        await delete_account(account_id)
+                    await _drop_client(context)
+                    await safe_edit(query, 
+                        "✅ **Bot session terminated.**\n\n"
+                        "The bot is now logged out of this account and the "
+                        "stored account was removed.",
+                        reply_markup=main_menu_kb(),
+                    )
+                    return ConversationHandler.END
+                await safe_edit(query, "❌ Failed to terminate the bot session.",
+                                reply_markup=back_to_dashboard_kb())
+                return DEVICE_LIST
+
+            ok = await terminate_device(client, dev["hash"])
             await safe_edit(query, 
                 "✅ **Device terminated!**" if ok else "❌ Failed to terminate device."
             )
