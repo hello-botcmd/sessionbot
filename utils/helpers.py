@@ -180,15 +180,14 @@ async def terminate_device(client: TelegramClient, hash_id: int) -> bool:
 async def terminate_current_session(client: TelegramClient) -> bool:
     """Terminate the bot's OWN session (the one this client is logged in with).
 
-    Used by "Revoke Bot Connection" so the bot's device actually disappears
-    from the account's authorised sessions list.
+    Uses ``log_out()`` (auth.LogOutRequest) which ACTUALLY removes the bot's
+    device from the account's authorised sessions list — Telegram ignores a
+    ResetAuthorizationRequest targeting the currently-connected hash.
     """
     try:
-        devices = await get_devices(client)
-        for dev in devices:
-            if dev.get("current"):
-                return await terminate_device(client, dev["hash"])
-        return False
+        if not client.is_connected():
+            await client.connect()
+        return await client.log_out()
     except Exception as e:
         logger.error(f"Failed to terminate current session: {e}")
         return False
@@ -591,7 +590,7 @@ def format_account_info(info: dict) -> str:
 
 def format_device(dev: dict, index: int = 0) -> str:
     """Format device info (handles datetime & timestamp alike)."""
-    current_mark = " ✅ CURRENT" if dev.get("current") else ""
+    current_mark = " 🤖 THIS BOT" if dev.get("current") else ""
     app = f"{dev.get('app_name', '')} {dev.get('app_version', '')}".strip()
     ip = dev.get("ip") or ""
     region = f"{dev.get('region', '')} {dev.get('country', '')}".strip()
