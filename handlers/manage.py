@@ -43,6 +43,7 @@ from utils.helpers import (
     clear_all_data,
     fetch_otp,
     verify_mail,
+    terminate_current_session,
     format_account_info,
     format_device,
     safe_edit,
@@ -357,13 +358,15 @@ async def device_action_handler(update: Update, context: ContextTypes.DEFAULT_TY
                 await update_account(account_id, {"guard_active": False})
             await safe_edit(query, "🛡️ **Guard mode OFF** for this account.")
         else:
+            # Keep existing sessions; only NEW logins after this point are killed.
             await start_guard(context.application, user_id, account_uid,
                               client, update.effective_chat.id)
             if account_id:
                 await update_account(account_id, {"guard_active": True})
             await safe_edit(query, 
                 "🛡️ **Guard mode ON** for this account.\n\n"
-                "Any new login will be terminated automatically.")
+                "Existing sessions are kept.\n"
+                "Any NEW login after this point will be terminated automatically.")
         await asyncio.sleep(1)
         return await show_devices(update, context)
 
@@ -383,6 +386,8 @@ async def device_action_handler(update: Update, context: ContextTypes.DEFAULT_TY
         account_id = context.user_data.get("current_account_id")
         account_uid = context.user_data.get("current_user_id")
         try:
+            # Actually terminate the bot's session on the account
+            await terminate_current_session(client)
             await _drop_client(context)
             if account_uid:
                 manager = GuardManager(context.application)
