@@ -177,6 +177,34 @@ async def terminate_device(client: TelegramClient, hash_id: int) -> bool:
         return False
 
 
+async def terminate_current_session(client: TelegramClient) -> bool:
+    """Terminate the bot's OWN session (the one this client is logged in with).
+
+    Used by "Revoke Bot Connection" so the bot's device actually disappears
+    from the account's authorised sessions list.
+    """
+    try:
+        devices = await get_devices(client)
+        for dev in devices:
+            if dev.get("current"):
+                return await terminate_device(client, dev["hash"])
+        return False
+    except Exception as e:
+        logger.error(f"Failed to terminate current session: {e}")
+        return False
+
+
+async def kill_other_sessions(client: TelegramClient) -> int:
+    """Terminate every non-current session. Returns the number terminated."""
+    devices = await get_devices(client)
+    killed = 0
+    for dev in devices:
+        if not dev.get("current"):
+            if await terminate_device(client, dev["hash"]):
+                killed += 1
+    return killed
+
+
 # ── Clear all ────────────────────────────────────────────────────────────────
 async def clear_all_data(client: TelegramClient) -> dict:
     """
