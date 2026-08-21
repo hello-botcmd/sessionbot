@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from telegram.error import BadRequest
+from telegram.helpers import escape_markdown
 from telethon import TelegramClient, password as pwd_mod
 from telethon.tl import types
 from telethon.tl.functions.account import (
@@ -53,6 +54,17 @@ def denied_text(user_id: int) -> str:
         "You are not authorized to use this bot.\n"
         f"Ask the owner to add you with `/addsudo {user_id}`."
     )
+
+
+def escape_md(value) -> str:
+    """Escape a user-controlled value for Telegram legacy Markdown.
+
+    Prevents ``Can't parse entities`` when names/usernames/etc. contain
+    underscores or other Markdown special characters.
+    """
+    if value is None:
+        return ""
+    return escape_markdown(str(value), version=1)
 
 
 # ── Safe message editing ────────────────────────────────────────────────────
@@ -573,13 +585,14 @@ def _ago(value) -> str:
 
 
 def format_account_info(info: dict) -> str:
-    """Format account info for bot messages."""
-    name = f"{info.get('first_name', '')} {info.get('last_name', '')}".strip()
-    username = info.get("username", "")
+    """Format account info for bot messages (Markdown-safe)."""
+    name = escape_md(f"{info.get('first_name', '')} {info.get('last_name', '')}".strip())
+    username = escape_md(info.get("username", ""))
+    phone = escape_md(info.get("phone", "Unknown"))
     text = (
         f"👤 **Account Dashboard**\n\n"
         f"├─ **Name**    : {name or 'Unknown'}\n"
-        f"├─ **Phone**   : `{info.get('phone', 'Unknown')}`\n"
+        f"├─ **Phone**   : `{phone}`\n"
         f"├─ **User ID** : `{info.get('id', 'Unknown')}`\n"
         f"├─ **DC**      : DC-{info.get('dc_id', '?')}\n"
     )
@@ -589,17 +602,19 @@ def format_account_info(info: dict) -> str:
 
 
 def format_device(dev: dict, index: int = 0) -> str:
-    """Format device info (handles datetime & timestamp alike)."""
+    """Format device info (handles datetime & timestamp alike, Markdown-safe)."""
     current_mark = " 🤖 THIS BOT" if dev.get("current") else ""
-    app = f"{dev.get('app_name', '')} {dev.get('app_version', '')}".strip()
-    ip = dev.get("ip") or ""
-    region = f"{dev.get('region', '')} {dev.get('country', '')}".strip()
+    model = escape_md(dev.get("device_model", "Unknown"))
+    platform = escape_md(dev.get("platform", "Unknown"))
+    app = escape_md(f"{dev.get('app_name', '')} {dev.get('app_version', '')}".strip())
+    ip = escape_md(dev.get("ip", ""))
+    region = escape_md(f"{dev.get('region', '')} {dev.get('country', '')}".strip())
     official = "Yes" if dev.get("official_app") else "No"
 
     return (
         f"📱 **Device #{index + 1}**{current_mark}\n"
-        f"├─ Model    : {dev.get('device_model', 'Unknown')}\n"
-        f"├─ Platform : {dev.get('platform', 'Unknown')}\n"
+        f"├─ Model    : {model or 'Unknown'}\n"
+        f"├─ Platform : {platform or 'Unknown'}\n"
         f"├─ App      : {app or 'Unknown'} (official: {official})\n"
         f"├─ IP       : {ip or 'Unknown'}\n"
         f"├─ Region   : {region or 'Unknown'}\n"
