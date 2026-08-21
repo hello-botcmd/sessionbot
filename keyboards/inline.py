@@ -144,7 +144,8 @@ def accounts_pagination_kb(accounts: list, page: int, total_pages: int):
     return InlineKeyboardMarkup(kb)
 
 
-def account_detail_kb(account_id: str):
+def account_detail_kb(account_id: str, guard_active: bool = False):
+    guard_label = "🛡️ Guard: ON" if guard_active else "🛡️ Guard: OFF"
     kb = [
         [
             InlineKeyboardButton("📨 Fetch OTP", callback_data=f"acc_otp:{account_id}"),
@@ -153,6 +154,7 @@ def account_detail_kb(account_id: str):
         [
             InlineKeyboardButton("🔓 Allow Login (60s)", callback_data=f"acc_allow:{account_id}"),
         ],
+        [InlineKeyboardButton(guard_label, callback_data=f"acc_guard:{account_id}")],
         [InlineKeyboardButton("🔙 Back to Accounts", callback_data="acc_back")],
     ]
     return InlineKeyboardMarkup(kb)
