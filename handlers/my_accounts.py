@@ -1,4 +1,4 @@
-      import logging
+import logging
 from datetime import datetime, timezone, timedelta
 
 from telegram import Update
@@ -19,7 +19,6 @@ from utils.helpers import (
     get_devices,
     fetch_otp,
     terminate_current_session,
-    kill_other_sessions,
     safe_edit,
     denied_text,
 )
@@ -276,8 +275,7 @@ async def account_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await safe_edit(query, f"❌ Could not connect for guard: {info}",
                                 reply_markup=account_detail_kb(account_id))
                 return ACCOUNT_DETAIL
-            # Kill any already-logged-in sessions first, then watch for new ones
-            await kill_other_sessions(guard_client)
+            # Keep existing sessions; only NEW logins after this point are killed.
             await start_guard(context.application, user_id, account_uid,
                               guard_client, update.effective_chat.id)
             await update_account(account_id, {"guard_active": True})
