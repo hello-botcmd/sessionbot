@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import re
 import sqlite3
 import struct
 from dataclasses import dataclass
@@ -379,24 +380,22 @@ async def verify_and_get_client(
     Returns ``(client, info_dict)`` on success,
     ``(None, error_string)`` on failure.
     """
-    # Step 1: Check if raw hex with no dc_id → probe
-    if _looks_like_raw_hex(raw_input) and dc_id is None:
-        last_error = "Could not authenticate on any datacenter."
-        probe_timeout = min(MTPROTO_TIMEOUT, 10)
-        for probe_dc in DC_PROBE_ORDER:
-            result = await _try_dc(raw_input, api_id, api_hash, probe_dc, probe_timeout)
-            if result[0] is not None:
-                return result
-            if isinstance(result[1], str):
-                last_error = result[1]
-            if "Rate-limited" in str(result[1]):
-                return None, result[1]
-        return None, f"Tried all DCs (5→4→3→2→1). Last error: {last_error}"
+    # Step 1: Raw auth-key hex (detect FIRST and robustly, incl. dc:hex)
+    hex_clean, hex_dc = _extract_hex(raw_input)
+    if hex_clean is not None:
+        return await _verify_hex(hex_clean, api_id, api_hash, hex_dc or dc_id)
 
-    # Step 2: Normal path
+    # Step 2: Session strings / files
     try:
         parts = parse_session(raw_input, dc_id=dc_id)
     except ValueError as exc:
+        # Helpful hint when it LOOKS like hex but has the wrong length/chars.
+        cleaned = "".join(raw_input.strip().split())
+        if cleaned and all(c in "0123456789abcdefABCDEF" for c in cleaned):
+            return None, (
+                f"Auth-key hex must be exactly 512 chars (256 bytes); "
+                f"got {len(cleaned)}."
+            )
         return None, str(exc)
 
     try:
@@ -435,6 +434,40 @@ async def verify_and_get_client(
     return client, info
 
 
+def _extract_hex(value: str) -> tuple[str | None, int | None]:
+    """Detect a raw auth-key hex. Returns ``(hex_clean, dc_id_or_None)``.
+
+    Robustly handles whitespace/newlines, an optional ``0x`` prefix, and common
+    wrappings like ``dc:hex`` / ``hex:dc`` / ``dc|hex`` / ``dc-hex``.
+    """
+    v = value.strip()
+    if v.lower().startswith("0x"):
+        v = v[2:]
+    # Remove ALL whitespace (spaces, tabs, newlines) — users often paste hex
+    # with line breaks.
+    v = "".join(v.split())
+
+    if not v:
+        return None, None
+
+    # "dc:hex" / "dc|hex" / "dc-hex"
+    m = re.match(r"^([1-5])[:|\-]([0-9a-fA-F]{512})$", v)
+    if m:
+        return m.group(2).lower(), int(m.group(1))
+    # "hex:dc" / "hex|dc" / "hex-dc"
+    m = re.match(r"^([0-9a-fA-F]{512})[:|\-]([1-5])$", v)
+    if m:
+        return m.group(1).lower(), int(m.group(2))
+    # Pure 512-char hex
+    if len(v) == 512:
+        try:
+            bytes.fromhex(v)
+            return v.lower(), None
+        except ValueError:
+            return None, None
+    return None, None
+
+
 def _looks_like_raw_hex(value: str) -> bool:
     """Check if input is a raw 512-char hex string."""
     clean = value.strip()
@@ -447,6 +480,29 @@ def _looks_like_raw_hex(value: str) -> bool:
         return True
     except ValueError:
         return False
+
+
+async def _verify_hex(
+    hex_clean: str, api_id: int, api_hash: str, dc_hint: int | None
+) -> tuple[TelegramClient | None, dict[str, Any] | str]:
+    """Try authenticating a raw hex auth-key across the datacenters."""
+    timeout = min(MTPROTO_TIMEOUT, 8)
+
+    order: list[int] = []
+    if dc_hint in DC_IPS:
+        order.append(dc_hint)
+    order += [d for d in DC_PROBE_ORDER if d != dc_hint]
+
+    last_error = "Could not authenticate on any datacenter."
+    for dc in order:
+        result = await _try_dc(hex_clean, api_id, api_hash, dc, timeout)
+        if result[0] is not None:
+            return result
+        if isinstance(result[1], str):
+            last_error = result[1]
+        if "Rate-limited" in str(result[1]):
+            return None, result[1]
+    return None, f"Tried DCs {order}. Last error: {last_error}"
 
 
 async def _try_dc(
