@@ -43,7 +43,7 @@ def device_dashboard_kb(devices: list, guard_active: bool = False):
     for i, dev in enumerate(devices):
         model = (dev.get("device_model") or "Unknown")[:18]
         platform = (dev.get("platform") or "")[:12]
-        cur = " ✅" if dev.get("current") else ""
+        cur = " 🤖 BOT" if dev.get("current") else ""
         label = f"📱 {i + 1}. {model} · {platform}{cur}"
         kb.append([InlineKeyboardButton(label, callback_data=f"dev:{i}")])
 
