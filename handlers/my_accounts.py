@@ -1,4 +1,4 @@
-import logging
+      import logging
 from datetime import datetime, timezone, timedelta
 
 from telegram import Update
@@ -14,7 +14,15 @@ from database.models import (
     is_authorized,
 )
 from keyboards.inline import accounts_pagination_kb, account_detail_kb, main_menu_kb
-from utils.helpers import check_spam_status, get_devices, fetch_otp, safe_edit, denied_text
+from utils.helpers import (
+    check_spam_status,
+    get_devices,
+    fetch_otp,
+    terminate_current_session,
+    kill_other_sessions,
+    safe_edit,
+    denied_text,
+)
 from utils.session_utils import verify_and_get_client
 from utils.guard import GuardManager, start_guard
 
@@ -91,6 +99,7 @@ async def accounts_navigation(update: Update, context: ContextTypes.DEFAULT_TYPE
         page = int(data.split(":", 1)[1])
         return await _show_accounts_page(update, context, user_id, page)
     if data == "acc_refresh":
+        await _prune_invalid_accounts(context, user_id)
         page = context.user_data.get("accounts_page", 0)
         return await _show_accounts_page(update, context, user_id, page)
     if data.startswith("acc_view:"):
@@ -98,6 +107,28 @@ async def accounts_navigation(update: Update, context: ContextTypes.DEFAULT_TYPE
         return await _show_account_detail(update, context, account_id)
 
     return PAGE_VIEWING
+
+
+async def _prune_invalid_accounts(context, user_id: int):
+    """Verify every stored account and remove any whose session is dead."""
+    accounts = await get_accounts_by_owner(user_id)
+    manager = GuardManager(context.application)
+    for acc in accounts:
+        account_id = str(acc["_id"])
+        client, info = await verify_and_get_client(
+            acc.get("session_string") or acc.get("hex_key", ""),
+            API_ID, API_HASH,
+        )
+        if client is None:
+            await delete_account(account_id)
+            await manager.stop_for_user(user_id, account_uid=acc.get("user_id"), notify=False)
+            logger.info("Pruned dead account %s (uid %s)", account_id, acc.get("user_id"))
+        else:
+            if client.is_connected():
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
 
 
 async def _show_account_detail(update, context, account_id: str):
@@ -204,6 +235,10 @@ async def account_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await safe_edit(query, "🔌 Revoking bot connection...")
         try:
+            detail_client = context.user_data.get(f"detail_client_{account_id}")
+            if detail_client and detail_client.is_connected():
+                # Actually terminate the bot's session on the account
+                await terminate_current_session(detail_client)
             await _disconnect_detail(context, account_id)
             if account:
                 await delete_account(account_id)
@@ -241,6 +276,8 @@ async def account_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await safe_edit(query, f"❌ Could not connect for guard: {info}",
                                 reply_markup=account_detail_kb(account_id))
                 return ACCOUNT_DETAIL
+            # Kill any already-logged-in sessions first, then watch for new ones
+            await kill_other_sessions(guard_client)
             await start_guard(context.application, user_id, account_uid,
                               guard_client, update.effective_chat.id)
             await update_account(account_id, {"guard_active": True})
