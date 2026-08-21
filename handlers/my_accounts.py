@@ -16,7 +16,7 @@ from database.models import (
 from keyboards.inline import accounts_pagination_kb, account_detail_kb, main_menu_kb
 from utils.helpers import check_spam_status, get_devices, fetch_otp, safe_edit, denied_text
 from utils.session_utils import verify_and_get_client
-from utils.guard import GuardManager
+from utils.guard import GuardManager, start_guard
 
 logger = logging.getLogger(__name__)
 
@@ -148,7 +148,13 @@ async def _show_account_detail(update, context, account_id: str):
             "⚠️ Session expired."
         )
 
-    await safe_edit(query, info_text, parse_mode="Markdown", reply_markup=account_detail_kb(account_id))
+    manager = GuardManager(context.application)
+    guard_active = manager.get(
+        manager.key(update.effective_user.id, account.get("user_id", 0))
+    ) is not None
+
+    await safe_edit(query, info_text, parse_mode="Markdown",
+                    reply_markup=account_detail_kb(account_id, guard_active))
     return ACCOUNT_DETAIL
 
 
@@ -212,6 +218,35 @@ async def account_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await safe_edit(query, f"❌ Error: {e}", reply_markup=account_detail_kb(account_id))
             return ACCOUNT_DETAIL
 
+    elif data.startswith("acc_guard:"):
+        account_id = data.split(":", 1)[1]
+        account = await get_account_by_id(account_id)
+        if not account:
+            await safe_edit(query, "❌ Account not found.", reply_markup=main_menu_kb())
+            return ConversationHandler.END
+
+        account_uid = account.get("user_id", 0)
+        manager = GuardManager(context.application)
+        key = manager.key(user_id, account_uid)
+
+        if manager.get(key):
+            await manager.stop(key, notify=True)
+            await update_account(account_id, {"guard_active": False})
+        else:
+            guard_client, info = await verify_and_get_client(
+                account.get("session_string") or account.get("hex_key", ""),
+                API_ID, API_HASH,
+            )
+            if guard_client is None:
+                await safe_edit(query, f"❌ Could not connect for guard: {info}",
+                                reply_markup=account_detail_kb(account_id))
+                return ACCOUNT_DETAIL
+            await start_guard(context.application, user_id, account_uid,
+                              guard_client, update.effective_chat.id)
+            await update_account(account_id, {"guard_active": True})
+
+        return await _show_account_detail(update, context, account_id)
+
     elif data.startswith("acc_allow:"):
         account_id = data.split(":", 1)[1]
         client = context.user_data.get(f"detail_client_{account_id}")
@@ -271,6 +306,6 @@ async def back_main_cleanup(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def register(application):
     application.add_handler(CallbackQueryHandler(my_accounts_entry, pattern=r"^my_accounts$"))
     application.add_handler(CallbackQueryHandler(accounts_navigation, pattern=r"^acc_page:|^acc_refresh$|^acc_view:"))
-    application.add_handler(CallbackQueryHandler(account_actions, pattern=r"^acc_otp:|^acc_revoke:|^acc_allow:"))
+    application.add_handler(CallbackQueryHandler(account_actions, pattern=r"^acc_otp:|^acc_revoke:|^acc_allow:|^acc_guard:"))
     application.add_handler(CallbackQueryHandler(back_to_accounts, pattern=r"^acc_back$"))
     application.add_handler(CallbackQueryHandler(back_main_cleanup, pattern=r"^back_main$"))
