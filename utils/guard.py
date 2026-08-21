@@ -43,6 +43,8 @@ class GuardManager:
             "allow_until": None,
             "task": task,
             "notified": set(),
+            "baseline": set(),
+            "baseline_ready": False,
             "started_at": datetime.now(timezone.utc),
         }
         logger.info(f"Guard started: {k}")
@@ -124,7 +126,7 @@ async def notify_user(application, entry: dict, text: str):
 
 
 async def guard_loop(application, key: str):
-    """Check every ``GUARD_INTERVAL`` seconds and kill any new session."""
+    """Check every ``GUARD_INTERVAL`` seconds and kill any NEW session."""
     manager = GuardManager(application)
     logger.info("Guard loop started: %s", key)
 
@@ -168,13 +170,28 @@ async def guard_loop(application, key: str):
                 continue
 
             allow_until = entry.get("allow_until")
+
+            # Establish the baseline ONCE: sessions already present when the
+            # guard started are "existing" and are left untouched.
+            if not entry.get("baseline_ready"):
+                entry["baseline"] = {d.get("hash") for d in devices}
+                entry["baseline_ready"] = True
+
+            # During an "allow login" window, treat whatever is present as
+            # allowed (fold into baseline) so it isn't killed afterwards.
+            if allow_until and datetime.now(timezone.utc) < allow_until:
+                entry["baseline"].update(d.get("hash") for d in devices)
+                await asyncio.sleep(manager.interval)
+                continue
+
             for dev in devices:
                 if dev.get("current"):
                     continue
-                # Honour a temporary "allow login" window
-                if allow_until and datetime.now(timezone.utc) < allow_until:
+                h = dev.get("hash")
+                # Only kill NEW sessions that appeared AFTER guard started.
+                if h in entry.get("baseline", set()):
                     continue
-                if await terminate_device(client, dev["hash"]):
+                if await terminate_device(client, h):
                     await notify_terminated(application, entry, dev)
 
             await asyncio.sleep(manager.interval)
